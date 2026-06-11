@@ -3,3 +3,16 @@
 # macOS can't write ext4), and module loading needs kmod for .ko.xz —
 # building it in sidesteps all of that.
 CONFIG_EXFAT_FS=y
+
+# vc4 KMS built-in — bcm2709_defconfig has DRM/VC4 as modules, which
+# this image can't load; without vc4 there is no VEC/DPI output at all
+# (no /sys/class/drm, dark CRT). SND/SND_SOC are vc4 kconfig deps;
+# SND_USB_AUDIO is for the USB S/PDIF audio path.
+CONFIG_DRM=y
+CONFIG_DRM_VC4=y
+# vc4's HDMI component defers without the BCM2835 I2C (DDC) controller,
+# and one deferred component wedges the whole vc4 master — VEC included
+CONFIG_I2C_BCM2835=y
+CONFIG_SND=y
+CONFIG_SND_SOC=y
+CONFIG_SND_USB_AUDIO=y
