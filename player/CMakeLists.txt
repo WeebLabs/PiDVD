@@ -7,7 +7,9 @@ add_compile_options(-Wall -Wextra)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(DVDREAD REQUIRED IMPORTED_TARGET dvdread)
 
-add_library(pidvd_core
+# STATIC explicitly: Buildroot passes BUILD_SHARED_LIBS=ON, which would
+# turn this into a .so that the install step doesn't ship
+add_library(pidvd_core STATIC
     src/core/disc.c
 )
 target_include_directories(pidvd_core PUBLIC src)
