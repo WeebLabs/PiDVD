@@ -13,5 +13,5 @@ BOARD_DIR="$(dirname "$0")"
 install -m 0644 "${BOARD_DIR}/config.txt" "${BINARIES_DIR}/rpi-firmware/config.txt"
 install -m 0644 "${BOARD_DIR}/cmdline.txt" "${BINARIES_DIR}/rpi-firmware/cmdline.txt"
 
-# Mount point for USB disc drives
-mkdir -p "${TARGET_DIR}/media/usb"
+# Mount point for USB disc drives, and for the boot partition (deploys)
+mkdir -p "${TARGET_DIR}/media/usb" "${TARGET_DIR}/boot"

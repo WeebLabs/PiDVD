@@ -53,6 +53,8 @@ BR2_PACKAGE_ALSA_UTILS_APLAY=y
 BR2_PACKAGE_ALSA_UTILS_AMIXER=y
 # diagnostics
 BR2_PACKAGE_EVTEST=y
+# network deploy loop (scripts/deploy.sh) — ssh in, push binaries/kernel
+BR2_PACKAGE_DROPBEAR=y
 
 # Filesystems for USB ISO drives
 BR2_PACKAGE_DOSFSTOOLS=y

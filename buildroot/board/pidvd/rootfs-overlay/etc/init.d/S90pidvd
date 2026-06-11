@@ -10,6 +10,8 @@ case "$1" in
     # exfat is built as a module; FAT32 can't hold DVD9 ISOs (>4GiB),
     # so exFAT is the expected drive format
     modprobe exfat 2>/dev/null
+    ip=$(ip -4 addr show eth0 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p')
+    [ -n "$ip" ] && msg "PiDVD: network $ip"
     msg "PiDVD: waiting for USB disc drive..."
     n=0
     while [ $n -lt 15 ]; do
