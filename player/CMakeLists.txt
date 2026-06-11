@@ -19,9 +19,23 @@ target_link_libraries(pidvd_core PUBLIC PkgConfig::DVDREAD)
 add_executable(dvdinfo tools/dvdinfo.c)
 target_link_libraries(dvdinfo pidvd_core)
 
-# The player binary. Currently a milestone-1 stub; grows KMS/ALSA/evdev
-# backends (Linux target only) as platform/linux/ is implemented.
-add_executable(pidvd-player src/player/main.c)
-target_link_libraries(pidvd-player pidvd_core)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # The player proper: KMS/DRM output (VEC), demux, libmpeg2 decode.
+    # Linux-only — the host (macOS) build provides dvdinfo for core work.
+    pkg_check_modules(DRM REQUIRED IMPORTED_TARGET libdrm)
+    pkg_check_modules(MPEG2 REQUIRED IMPORTED_TARGET libmpeg2 libmpeg2convert)
 
-install(TARGETS pidvd-player dvdinfo RUNTIME DESTINATION bin)
+    add_executable(pidvd-player
+        src/player/main.c
+        src/demux/ps.c
+        src/decode/video_mpeg2.c
+        platform/linux/video_kms.c
+    )
+    target_include_directories(pidvd-player PRIVATE platform)
+    target_link_libraries(pidvd-player
+        pidvd_core PkgConfig::DRM PkgConfig::MPEG2)
+
+    install(TARGETS pidvd-player dvdinfo RUNTIME DESTINATION bin)
+else()
+    install(TARGETS dvdinfo RUNTIME DESTINATION bin)
+endif()

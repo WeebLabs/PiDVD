@@ -65,4 +65,9 @@ pidvd_standard_t pidvd_disc_standard(const pidvd_disc_t *d, bool *mixed);
 
 const char *pidvd_standard_name(pidvd_standard_t s);
 
+/* The underlying dvd_reader_t* for VOB access (cast at the call site;
+ * kept void* so this header stays free of libdvdread types).
+ * TODO(m2): replaced by the dvdnav-based stream layer. */
+void *pidvd_disc_reader(const pidvd_disc_t *d);
+
 #endif

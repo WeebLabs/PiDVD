@@ -174,6 +174,7 @@ void pidvd_disc_close(pidvd_disc_t *d)
 }
 
 const char *pidvd_disc_volume_id(const pidvd_disc_t *d) { return d->volume_id; }
+void *pidvd_disc_reader(const pidvd_disc_t *d) { return d->dvd; }
 int pidvd_disc_title_count(const pidvd_disc_t *d) { return d->n_titles; }
 
 const pidvd_title_t *pidvd_disc_title(const pidvd_disc_t *d, int idx)
