@@ -28,6 +28,7 @@ struct pidvd_video {
     int fd;
     uint32_t conn_id;
     uint32_t crtc_id;
+    int crtc_index;
     drmModeModeInfo mode;
     struct kms_buf buf[2];
     int back;            /* index handed out by begin_frame */
@@ -82,6 +83,9 @@ static bool pick_mode(pidvd_video_t *v, pidvd_standard_t std)
                                                    : res->crtcs[0];
                     if (e)
                         drmModeFreeEncoder(e);
+                    for (int k = 0; k < res->count_crtcs; k++)
+                        if (res->crtcs[k] == v->crtc_id)
+                            v->crtc_index = k;
                     found = true;
                     break;
                 }
@@ -158,8 +162,8 @@ bool pidvd_video_present(pidvd_video_t *v, pidvd_frame_t *f,
 {
     (void)f;
     /* TODO(field-sched): honor tff against mode field order; rff drives
-     * 3:2 cadence on NTSC film content. PAL is 2 fields/frame so frame
-     * flips at vsync are already field-accurate for this milestone. */
+     * 3:2 cadence on NTSC film content (3 fields via one extra vblank
+     * wait below). */
     (void)tff; (void)rff;
 
     if (drmModePageFlip(v->fd, v->crtc_id, v->buf[v->back].fb_id,
@@ -178,6 +182,18 @@ bool pidvd_video_present(pidvd_video_t *v, pidvd_frame_t *f,
         drmHandleEvent(v->fd, &ev);
     }
     v->back ^= 1;
+
+    /* Interlaced modes vblank per FIELD (50/59.94 Hz); the flip above
+     * consumed one field, so wait one more to hold the frame for two
+     * fields — 25/29.97 frames/s, field-accurate for 2:2 content. */
+    drmVBlank vbl = {
+        .request = {
+            .type = DRM_VBLANK_RELATIVE
+                  | (v->crtc_index << DRM_VBLANK_HIGH_CRTC_SHIFT),
+            .sequence = 1,
+        },
+    };
+    drmWaitVBlank(v->fd, &vbl);
     return true;
 }
 

@@ -14,28 +14,22 @@
 #include "decode/video_mpeg2.h"
 #include "demux/ps.h"
 #include "platform/platform.h"
+#include "present/presenter.h"
 
 #define SECTORS_PER_READ 64
 
 struct play_ctx {
     pidvd_video_t *video;
+    pidvd_presenter_t *pres;
     pidvd_vdec_t *vdec;
     pidvd_ps_t ps;
-    long frames;
 };
 
 static void on_frame(void *opaque, const uint8_t *rgb32, int w, int h,
                      int stride, bool tff, bool rff)
 {
     struct play_ctx *p = opaque;
-    pidvd_frame_t *f = pidvd_video_begin_frame(p->video);
-    int rows = h < f->height ? h : f->height;
-    int line = (w < f->width ? w : f->width) * 4;
-    for (int y = 0; y < rows; y++)
-        memcpy(f->pixels + (size_t)y * f->stride,
-               rgb32 + (size_t)y * stride, line);
-    pidvd_video_present(p->video, f, tff, rff);
-    p->frames++;
+    pidvd_presenter_push(p->pres, rgb32, w, h, stride, tff, rff);
 }
 
 static void on_video_es(void *opaque, const uint8_t *data, size_t len)
@@ -52,6 +46,8 @@ static int play_title_vobs(pidvd_disc_t *d, int vts_nr,
     p.video = pidvd_video_open(std);
     if (!p.video)
         return 1;
+    pidvd_frame_t *dims = pidvd_video_begin_frame(p.video);
+    p.pres = pidvd_presenter_start(p.video, dims->width, dims->height);
     p.vdec = pidvd_vdec_new(on_frame, &p);
     pidvd_ps_init(&p.ps, on_video_es, &p);
 
@@ -59,6 +55,7 @@ static int play_title_vobs(pidvd_disc_t *d, int vts_nr,
                                    DVD_READ_TITLE_VOBS);
     if (!vobs) {
         fprintf(stderr, "pidvd: cannot open VTS %d title VOBs\n", vts_nr);
+        pidvd_presenter_stop(p.pres);
         pidvd_vdec_free(p.vdec);
         pidvd_video_close(p.video);
         return 1;
@@ -73,8 +70,8 @@ static int play_title_vobs(pidvd_disc_t *d, int vts_nr,
         offset += (int)got;
     }
 
-    fprintf(stderr, "pidvd: end of title VOBs, %ld frames shown\n",
-            p.frames);
+    long shown = pidvd_presenter_stop(p.pres);
+    fprintf(stderr, "pidvd: end of title VOBs, %ld frames shown\n", shown);
     DVDCloseFile(vobs);
     pidvd_vdec_free(p.vdec);
     pidvd_video_close(p.video);

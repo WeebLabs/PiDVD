@@ -29,11 +29,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         src/player/main.c
         src/demux/ps.c
         src/decode/video_mpeg2.c
+        src/present/presenter.c
         platform/linux/video_kms.c
     )
     target_include_directories(pidvd-player PRIVATE platform)
     target_link_libraries(pidvd-player
-        pidvd_core PkgConfig::DRM PkgConfig::MPEG2)
+        pidvd_core PkgConfig::DRM PkgConfig::MPEG2 pthread)
 
     install(TARGETS pidvd-player dvdinfo RUNTIME DESTINATION bin)
 else()
