@@ -1,0 +1,5 @@
+# PiDVD kernel additions on top of bcm2709_defconfig.
+# exFAT built-in: USB disc drives are exFAT (FAT32 can't hold DVD9 ISOs,
+# macOS can't write ext4), and module loading needs kmod for .ko.xz —
+# building it in sidesteps all of that.
+CONFIG_EXFAT_FS=y

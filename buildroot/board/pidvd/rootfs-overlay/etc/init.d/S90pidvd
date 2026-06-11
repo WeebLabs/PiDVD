@@ -1,0 +1,36 @@
+#!/bin/sh
+# PiDVD appliance launcher — milestone 1: mount the first USB drive,
+# run the player against the first ISO found, log to console.
+
+case "$1" in
+  start)
+    # exfat is built as a module; FAT32 can't hold DVD9 ISOs (>4GiB),
+    # so exFAT is the expected drive format
+    modprobe exfat 2>/dev/null
+    printf "PiDVD: waiting for USB disc drive...\n"
+    n=0
+    while [ $n -lt 15 ]; do
+      for dev in /dev/sda1 /dev/sda; do
+        if [ -b "$dev" ]; then
+          mount -o ro "$dev" /media/usb 2>/dev/null && break 2
+        fi
+      done
+      n=$((n + 1))
+      sleep 1
+    done
+
+    iso=$(find /media/usb -maxdepth 2 -iname '*.iso' | head -1)
+    if [ -n "$iso" ]; then
+      printf "PiDVD: disc inserted: %s\n" "$iso"
+      pidvd-player "$iso" &
+    else
+      printf "PiDVD: no ISO found on USB drive\n"
+    fi
+    ;;
+  stop)
+    killall pidvd-player 2>/dev/null
+    ;;
+  *)
+    echo "Usage: $0 {start|stop}"
+    ;;
+esac

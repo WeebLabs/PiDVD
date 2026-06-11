@@ -1,0 +1,8 @@
+config BR2_PACKAGE_PIDVD_PLAYER
+	bool "pidvd-player"
+	select BR2_PACKAGE_LIBDVDREAD
+	select BR2_PACKAGE_LIBDVDNAV
+	select BR2_PACKAGE_LIBDRM
+	select BR2_PACKAGE_ALSA_LIB
+	help
+	  PiDVD field-accurate DVD player (this repository's player/ tree).

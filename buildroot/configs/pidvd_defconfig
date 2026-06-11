@@ -1,0 +1,73 @@
+# PiDVD — Raspberry Pi 3 appliance image.
+# Written against Buildroot 2025.02 LTS; expect minor symbol drift on bump.
+# Modeled on upstream raspberrypi3_defconfig.
+
+# Architecture: 32-bit ARMv8 (Cortex-A53 + NEON) — keeps 32-bit NEON asm
+# paths in the decoders available and memory use low.
+BR2_arm=y
+BR2_cortex_a53=y
+BR2_ARM_FPU_NEON_VFPV4=y
+
+BR2_TOOLCHAIN_BUILDROOT_GLIBC=y
+BR2_TOOLCHAIN_BUILDROOT_CXX=y
+# Custom kernel is rpi-6.12.y — declare the header series, or Buildroot
+# assumes 2.6 and silently drops glibc (headers >= 3.2 required).
+BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_6_12=y
+
+BR2_TARGET_GENERIC_HOSTNAME="pidvd"
+BR2_TARGET_GENERIC_ISSUE="PiDVD"
+BR2_TARGET_GENERIC_ROOT_PASSWD="pidvd"
+BR2_SYSTEM_DHCP="eth0"
+
+# Raspberry Pi kernel fork (vc4 VEC/DPI support)
+BR2_LINUX_KERNEL=y
+BR2_LINUX_KERNEL_CUSTOM_GIT=y
+BR2_LINUX_KERNEL_CUSTOM_REPO_URL="https://github.com/raspberrypi/linux.git"
+BR2_LINUX_KERNEL_CUSTOM_REPO_VERSION="rpi-6.12.y"
+BR2_LINUX_KERNEL_DEFCONFIG="bcm2709"
+BR2_LINUX_KERNEL_DTS_SUPPORT=y
+# NOTE: the Pi firmware loads the DTB by its own naming (bcm2710-*);
+# the mainline-named bcm2837-* files are ignored by start.elf.
+BR2_LINUX_KERNEL_INTREE_DTS_NAME="broadcom/bcm2710-rpi-3-b broadcom/bcm2710-rpi-3-b-plus"
+BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
+BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_PIDVD_PATH)/board/pidvd/linux-extras.fragment"
+
+# Firmware/boot
+BR2_PACKAGE_RPI_FIRMWARE=y
+BR2_PACKAGE_RPI_FIRMWARE_VARIANT_PI=y
+# Pi 0-3 boot ROM stage — not installed by default
+BR2_PACKAGE_RPI_FIRMWARE_BOOTCODE_BIN=y
+BR2_PACKAGE_RPI_FIRMWARE_CONFIG_FILE="$(BR2_EXTERNAL_PIDVD_PATH)/board/pidvd/config.txt"
+
+# Player + media stack
+BR2_PACKAGE_PIDVD_PLAYER=y
+BR2_PACKAGE_LIBDVDREAD=y
+BR2_PACKAGE_LIBDVDNAV=y
+BR2_PACKAGE_LIBMPEG2=y
+BR2_PACKAGE_A52DEC=y
+BR2_PACKAGE_LIBDRM=y
+BR2_PACKAGE_ALSA_LIB=y
+BR2_PACKAGE_ALSA_UTILS=y
+BR2_PACKAGE_ALSA_UTILS_APLAY=y
+BR2_PACKAGE_ALSA_UTILS_AMIXER=y
+# diagnostics
+BR2_PACKAGE_EVTEST=y
+
+# Filesystems for USB ISO drives
+BR2_PACKAGE_DOSFSTOOLS=y
+BR2_PACKAGE_EXFAT=y
+BR2_PACKAGE_EXFAT_UTILS=y
+BR2_PACKAGE_E2FSPROGS=y
+
+# Rootfs overlay (init script, ALSA defaults)
+BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_PIDVD_PATH)/board/pidvd/rootfs-overlay"
+BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_PIDVD_PATH)/board/pidvd/post-build.sh"
+BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_PIDVD_PATH)/board/pidvd/post-image.sh"
+
+# Images
+BR2_TARGET_ROOTFS_EXT2=y
+BR2_TARGET_ROOTFS_EXT2_4=y
+BR2_TARGET_ROOTFS_EXT2_SIZE="120M"
+BR2_PACKAGE_HOST_DOSFSTOOLS=y
+BR2_PACKAGE_HOST_GENIMAGE=y
+BR2_PACKAGE_HOST_MTOOLS=y

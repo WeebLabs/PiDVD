@@ -1,0 +1,9 @@
+player/build/
+buildroot-dl/
+buildroot-src/
+output/
+output-build.log
+*.iso
+*.img
+.DS_Store
+player/.cache/

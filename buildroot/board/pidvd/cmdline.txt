@@ -1,0 +1,1 @@
+root=/dev/mmcblk0p2 rootwait ro console=tty1 console=serial0,115200 vc4.tv_norm=PAL video=Composite-1:720x576@50ie quiet

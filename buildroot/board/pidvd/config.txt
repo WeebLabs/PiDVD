@@ -1,0 +1,26 @@
+# PiDVD boot config — milestone 1: composite (VEC) output.
+# The player selects NTSC/PAL at runtime via KMS connector properties;
+# settings here only affect early boot.
+
+kernel=zImage
+enable_uart=1
+disable_overscan=1
+disable_splash=1
+boot_delay=0
+
+# Full KMS — the vc4 driver owns the VEC/DPI/pixel valves.
+# composite=1 is required: the overlay disables the VEC by default
+# (and composite is mutually exclusive with HDMI under KMS).
+dtoverlay=vc4-kms-v3d,composite=1
+# 16M starves the full start.elf (can fail to boot); 64M is safe with KMS
+gpu_mem=64
+
+# Firmware-era norm for the pre-KMS splash only; once KMS takes over,
+# the norm comes from the kernel cmdline / connector property.
+sdtv_mode=2
+sdtv_aspect=1
+
+# Milestone 3 (VGA666): replace the above with
+#   dtoverlay=vc4-kms-dpi-generic + interlaced timings, or a custom
+#   pidvd overlay once DPI interlace is proven. GPIO 0-21 become DPI;
+#   IR receiver goes on GPIO 22-27 (dtoverlay=gpio-ir,gpio_pin=23).
