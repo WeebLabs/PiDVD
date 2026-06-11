@@ -29,6 +29,7 @@ struct pidvd_video {
     uint32_t conn_id;
     uint32_t crtc_id;
     int crtc_index;
+    unsigned field_parity;   /* vblank-sequence parity flips latch on */
     drmModeModeInfo mode;
     struct kms_buf buf[2];
     int back;            /* index handed out by begin_frame */
@@ -122,9 +123,12 @@ pidvd_video_t *pidvd_video_open(pidvd_standard_t std)
         fprintf(stderr, "video: modeset failed: %s\n", strerror(errno));
         goto fail;
     }
-    fprintf(stderr, "video: %s %ux%u%s on Composite-1\n",
+    const char *par = getenv("PIDVD_FIELD_PARITY");
+    v->field_parity = (par && par[0] == '1') ? 1 : 0;
+    fprintf(stderr, "video: %s %ux%u%s on Composite-1, field parity %u\n",
             v->mode.name, v->mode.hdisplay, v->mode.vdisplay,
-            (v->mode.flags & DRM_MODE_FLAG_INTERLACE) ? "i" : "p");
+            (v->mode.flags & DRM_MODE_FLAG_INTERLACE) ? "i" : "p",
+            v->field_parity);
     v->back = 1;
     return v;
 fail:
@@ -161,11 +165,33 @@ bool pidvd_video_present(pidvd_video_t *v, pidvd_frame_t *f,
                          bool tff, bool rff)
 {
     (void)f;
-    /* TODO(field-sched): honor tff against mode field order; rff drives
-     * 3:2 cadence on NTSC film content (3 fields via one extra vblank
-     * wait below). */
+    /* Field-parity-locked presentation. vc4's vblank sequence ticks per
+     * FIELD on interlaced modes (verified: naive per-vblank flips ran
+     * at 2x). Latching every flip on one chosen sequence parity makes
+     * each frame's scanout start on the same field — with the right
+     * parity (PIDVD_FIELD_PARITY, eye-calibrated), that's the top
+     * field, and 2:2 TFF content is field-exact. The parity gate also
+     * enforces the two-fields-per-frame cadence by construction.
+     * TODO(field-sched): rff (NTSC 3:2) holds a third field and
+     * alternates parity; bff content inverts the target parity. */
     (void)tff; (void)rff;
 
+    uint32_t crtcbits =
+        (uint32_t)v->crtc_index << DRM_VBLANK_HIGH_CRTC_SHIFT;
+    drmVBlank w = {
+        .request = { .type = DRM_VBLANK_RELATIVE | crtcbits,
+                     .sequence = 1 },
+    };
+    if (drmWaitVBlank(v->fd, &w) == 0
+        && ((w.reply.sequence + 1) & 1) != v->field_parity) {
+        drmVBlank w2 = {
+            .request = { .type = DRM_VBLANK_RELATIVE | crtcbits,
+                         .sequence = 1 },
+        };
+        drmWaitVBlank(v->fd, &w2);
+    }
+    /* just past a vblank of the opposite parity: the flip below latches
+     * at the next boundary, which is the parity we want */
     if (drmModePageFlip(v->fd, v->crtc_id, v->buf[v->back].fb_id,
                         DRM_MODE_PAGE_FLIP_EVENT, &v->flip_pending) < 0)
         return false;
@@ -182,18 +208,6 @@ bool pidvd_video_present(pidvd_video_t *v, pidvd_frame_t *f,
         drmHandleEvent(v->fd, &ev);
     }
     v->back ^= 1;
-
-    /* Interlaced modes vblank per FIELD (50/59.94 Hz); the flip above
-     * consumed one field, so wait one more to hold the frame for two
-     * fields — 25/29.97 frames/s, field-accurate for 2:2 content. */
-    drmVBlank vbl = {
-        .request = {
-            .type = DRM_VBLANK_RELATIVE
-                  | (v->crtc_index << DRM_VBLANK_HIGH_CRTC_SHIFT),
-            .sequence = 1,
-        },
-    };
-    drmWaitVBlank(v->fd, &vbl);
     return true;
 }
 

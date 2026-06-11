@@ -1,0 +1,58 @@
+From: PiDVD <pidvd@localhost>
+Subject: [PATCH] drm/vc4: field-lock vblank sequence parity on interlaced
+ scanout
+
+On interlaced modes the PV raises a vblank interrupt per FIELD, but
+nothing in the DRM UAPI tells userspace which field a vblank or flip
+event refers to, making field-accurate presentation (e.g. a DVD player
+feeding a CRT) a matter of guesswork.
+
+The HVS fifo frame counter (SCALER_DISPSTAT1/2 FRCNTx) increments per
+field and is the hardware's authoritative field identity — the driver
+already consults it for the scanout-position field offset. Keep the
+software vblank counter's parity locked to it: if they disagree after a
+vblank is handled, account one extra vblank to resynchronize.
+
+Userspace can then derive absolute field identity from the sequence
+number of any vblank wait or page-flip event (constant parity <-> field
+mapping). Because the check runs on every vblank interrupt, a missed
+interrupt cannot silently invert the mapping; it heals on the next tick.
+
+--- a/drivers/gpu/drm/vc4/vc4_crtc.c
++++ b/drivers/gpu/drm/vc4/vc4_crtc.c
+@@ -871,6 +871,7 @@
+ {
+ 	struct drm_encoder *encoder = vc4_get_crtc_encoder(&crtc->base, crtc->base.state);
+ 	struct vc4_encoder *vc4_encoder = to_vc4_encoder(encoder);
++	struct vc4_dev *vc4 = to_vc4_dev(crtc->base.dev);
+ 
+ 	crtc->t_vblank = ktime_get();
+ 
+@@ -878,6 +879,27 @@
+ 		vc4_encoder->vblank(encoder);
+ 
+ 	drm_crtc_handle_vblank(&crtc->base);
++
++	/*
++	 * Field-lock the vblank sequence on interlaced scanout: the HVS
++	 * fifo frame counter increments per field, so its parity is the
++	 * hardware's field identity. Keeping the software vblank
++	 * counter's parity equal to it lets userspace read absolute
++	 * field identity from any event's sequence number, and a missed
++	 * interrupt self-heals here instead of silently inverting field
++	 * order.
++	 */
++	if (crtc->base.state &&
++	    (crtc->base.state->adjusted_mode.flags & DRM_MODE_FLAG_INTERLACE) &&
++	    vc4->hvs) {
++		u64 seq = drm_crtc_vblank_count(&crtc->base);
++		u8 frame = vc4_hvs_get_fifo_frame_count(vc4->hvs,
++						crtc->current_hvs_channel);
++
++		if ((seq ^ frame) & 1)
++			drm_crtc_handle_vblank(&crtc->base);
++	}
++
+ 	vc4_crtc_handle_page_flip(crtc);
+ }
+ 

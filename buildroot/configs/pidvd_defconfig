@@ -8,6 +8,7 @@ BR2_arm=y
 BR2_cortex_a53=y
 BR2_ARM_FPU_NEON_VFPV4=y
 
+BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_PIDVD_PATH)/board/pidvd/patches"
 BR2_TOOLCHAIN_BUILDROOT_GLIBC=y
 BR2_TOOLCHAIN_BUILDROOT_CXX=y
 # Custom kernel is rpi-6.12.y — declare the header series, or Buildroot
