@@ -1,0 +1,6 @@
+config BR2_PACKAGE_A52DEC
+	bool "a52dec"
+	help
+	  liba52 — ATSC A/52 (AC-3) audio decoder.
+	  (Carried in the PiDVD external tree: dropped from upstream
+	  Buildroot.)

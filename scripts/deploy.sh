@@ -17,7 +17,9 @@ echo ">> building player"
 docker run --rm -v pidvd-build:/br -v "$REPO":/work pidvd-builder sh -c "
     cd /br/buildroot-2025.02.3 &&
     make BR2_EXTERNAL=/work/buildroot O=/br/output BR2_DL_DIR=/br/dl \
-         pidvd-player-rebuild 2>&1 | grep -iE \"error\" && exit 1
+         pidvd-player-dirclean >/dev/null 2>&1
+    make BR2_EXTERNAL=/work/buildroot O=/br/output BR2_DL_DIR=/br/dl \
+         pidvd-player 2>&1 | grep -iE \"error|no rule|stop\.|failed\" && exit 1
     cp /br/output/target/usr/bin/pidvd-player /work/output/deploy-player" \
     || { echo '!! BUILD FAILED'; exit 1; }
 
