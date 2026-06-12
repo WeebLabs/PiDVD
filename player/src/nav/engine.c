@@ -41,6 +41,7 @@ struct engine {
     /* producer timing */
     double t_prev, t_acc, t_max;
     long t_n;
+    double nav_acc, dec_acc;   /* split: block fetch vs decode */
 };
 
 /* ---- compositing (presenter thread) ----------------------------------- */
@@ -107,9 +108,13 @@ static void on_frame(void *opaque, const uint8_t *y, const uint8_t *u,
         if (dt > e->t_max)
             e->t_max = dt;
         if (++e->t_n == 100) {
-            fprintf(stderr, "decode: avg %.1fms max %.1fms per frame\n",
-                    e->t_acc / e->t_n * 1000.0, e->t_max * 1000.0);
+            fprintf(stderr, "decode: avg %.1fms max %.1fms per frame "
+                    "(nav %.1fms dec %.1fms)\n",
+                    e->t_acc / e->t_n * 1000.0, e->t_max * 1000.0,
+                    e->nav_acc / e->t_n * 1000.0,
+                    e->dec_acc / e->t_n * 1000.0);
             e->t_acc = e->t_max = 0;
+            e->nav_acc = e->dec_acc = 0;
             e->t_n = 0;
         }
     }
@@ -240,15 +245,20 @@ int pidvd_nav_play(const char *iso_path)
         /* cache blocks avoid a per-sector memcpy out of dvdnav */
         uint8_t *blk = mem;
         int32_t event = 0, len = 0;
+        double t0 = now_s();
         if (dvdnav_get_next_cache_block(e.nav, &blk, &event, &len)
             != DVDNAV_STATUS_OK) {
             fprintf(stderr, "nav: %s\n", dvdnav_err_to_string(e.nav));
             break;
         }
 
+        double t1 = now_s();
+        e.nav_acc += t1 - t0;
+
         switch (event) {
         case DVDNAV_BLOCK_OK:
             pidvd_ps_push_sector(&e.ps, blk);
+            e.dec_acc += now_s() - t1;
             break;
         case DVDNAV_NOP:
             break;
