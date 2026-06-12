@@ -1,3 +1,4 @@
+#define _GNU_SOURCE   /* CPU_SET / pthread affinity */
 #include "nav/engine.h"
 
 #include <stdio.h>
@@ -5,6 +6,7 @@
 #include <string.h>
 #include <time.h>
 #include <pthread.h>
+#include <sched.h>
 #include <unistd.h>
 
 #include <dvdnav/dvdnav.h>
@@ -207,6 +209,12 @@ int pidvd_nav_play(const char *iso_path)
     e.video = pidvd_video_open(e.std);
     if (!e.video)
         return 1;
+    /* nav+decode on cores 0-2; core 3 belongs to the presenter */
+    cpu_set_t cpus;
+    CPU_ZERO(&cpus);
+    CPU_SET(0, &cpus); CPU_SET(1, &cpus); CPU_SET(2, &cpus);
+    pthread_setaffinity_np(pthread_self(), sizeof(cpus), &cpus);
+
     pthread_mutex_init(&e.spu_lock, NULL);
     pidvd_frame_t *dims = pidvd_video_begin_frame(e.video);
     e.pres = pidvd_presenter_start(e.video, dims->width, dims->height,
