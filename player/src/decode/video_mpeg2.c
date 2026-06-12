@@ -4,7 +4,6 @@
 #include <string.h>
 
 #include <mpeg2dec/mpeg2.h>
-#include <mpeg2dec/mpeg2convert.h>
 
 struct pidvd_vdec {
     mpeg2dec_t *dec;
@@ -36,10 +35,8 @@ static void drain(pidvd_vdec_t *d)
     while ((state = mpeg2_parse(d->dec)) != STATE_BUFFER) {
         switch (state) {
         case STATE_SEQUENCE:
-            /* decode straight to packed RGB32 — matches XRGB8888 dumb
-             * buffers on little-endian */
-            mpeg2_convert(d->dec, mpeg2convert_rgb32, NULL);
-            break;
+            break;   /* planar output; conversion runs on the
+                      * presenter core */
         case STATE_SLICE:
         case STATE_END:
         case STATE_INVALID_END:
@@ -48,9 +45,10 @@ static void drain(pidvd_vdec_t *d)
                 bool tff = pic && (pic->flags & PIC_FLAG_TOP_FIELD_FIRST);
                 bool rff = pic && pic->nb_fields > 2;
                 d->cb(d->ctx, d->info->display_fbuf->buf[0],
+                      d->info->display_fbuf->buf[1],
+                      d->info->display_fbuf->buf[2],
                       (int)d->info->sequence->width,
-                      (int)d->info->sequence->height,
-                      (int)d->info->sequence->width * 4, tff, rff);
+                      (int)d->info->sequence->height, tff, rff);
             }
             break;
         default:
@@ -69,6 +67,11 @@ void pidvd_vdec_push(pidvd_vdec_t *d, const uint8_t *data, size_t len)
         data += n;
         len -= n;
     }
+}
+
+void pidvd_vdec_reset(pidvd_vdec_t *d)
+{
+    mpeg2_reset(d->dec, 1);
 }
 
 void pidvd_vdec_free(pidvd_vdec_t *d)

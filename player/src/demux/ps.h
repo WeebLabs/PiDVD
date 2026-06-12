@@ -8,9 +8,12 @@
 #include <stdint.h>
 
 typedef void (*pidvd_es_cb)(void *ctx, const uint8_t *data, size_t len);
+typedef void (*pidvd_sub_cb)(void *ctx, int substream, const uint8_t *data,
+                             size_t len);
 
 typedef struct {
     pidvd_es_cb video_cb;
+    pidvd_sub_cb spu_cb;   /* sub-picture substreams 0-31 */
     void *ctx;
 } pidvd_ps_t;
 

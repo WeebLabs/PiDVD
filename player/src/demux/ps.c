@@ -5,6 +5,7 @@
 void pidvd_ps_init(pidvd_ps_t *ps, pidvd_es_cb video_cb, void *ctx)
 {
     ps->video_cb = video_cb;
+    ps->spu_cb = 0;
     ps->ctx = ctx;
 }
 
@@ -40,7 +41,19 @@ void pidvd_ps_push_sector(pidvd_ps_t *ps, const uint8_t s[2048])
                     ps->video_cb(ps->ctx, s + payload, pend - payload);
             }
         }
-        /* 0xBD (AC-3/subpics) and 0xC0.. (MPEG audio): milestone 2 */
+        else if (id == 0xBD && len >= 4) {
+            /* private stream 1: first payload byte is the substream id;
+             * 0x20-0x3f are sub-pictures (audio substreams: milestone 2b) */
+            size_t hdl = s[body + 2];
+            size_t payload = body + 3 + hdl;
+            size_t pend = body + len;
+            if (payload < pend) {
+                uint8_t sub = s[payload];
+                if (sub >= 0x20 && sub <= 0x3f && ps->spu_cb)
+                    ps->spu_cb(ps->ctx, sub - 0x20, s + payload + 1,
+                               pend - payload - 1);
+            }
+        }
 
         off = body + len;
     }
