@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,6 +36,11 @@ struct pidvd_video {
     int back;            /* index handed out by begin_frame */
     bool flip_pending;
     pidvd_frame_t frame;
+    /* flip diagnostics */
+    unsigned last_flip_seq;
+    long flips;
+    long delta_hist[6];   /* fields between flips: [0]=other, 1..5 */
+    double t_last;
 };
 
 static int create_buf(int fd, int w, int h, struct kms_buf *b)
@@ -154,26 +160,27 @@ pidvd_frame_t *pidvd_video_begin_frame(pidvd_video_t *v)
     return &v->frame;
 }
 
+struct flip_evt { bool pending; unsigned seq; };
+
 static void flip_done(int fd, unsigned frame, unsigned sec, unsigned usec,
                       void *data)
 {
-    (void)fd; (void)frame; (void)sec; (void)usec;
-    *(bool *)data = false;
+    struct flip_evt *e = data;
+    (void)fd; (void)sec; (void)usec;
+    e->seq = frame;
+    e->pending = false;
 }
 
 bool pidvd_video_present(pidvd_video_t *v, pidvd_frame_t *f,
                          bool tff, bool rff)
 {
     (void)f;
-    /* Field-parity-locked presentation. vc4's vblank sequence ticks per
-     * FIELD on interlaced modes (verified: naive per-vblank flips ran
-     * at 2x). Latching every flip on one chosen sequence parity makes
-     * each frame's scanout start on the same field — with the right
-     * parity (PIDVD_FIELD_PARITY, eye-calibrated), that's the top
-     * field, and 2:2 TFF content is field-exact. The parity gate also
-     * enforces the two-fields-per-frame cadence by construction.
-     * TODO(field-sched): rff (NTSC 3:2) holds a third field and
-     * alternates parity; bff content inverts the target parity. */
+    /* Field-parity-locked flips. With the kernel patches (0001/0002)
+     * the vblank sequence ticks once per field and its parity IS the
+     * hardware field identity. Latch every flip on the configured
+     * parity: each weaved frame then starts on the same (top) field —
+     * 2 fields per frame, 25fps, field-exact for 2:2 content.
+     * TODO(field-sched): rff (NTSC 3:2) = hold one extra field. */
     (void)tff; (void)rff;
 
     uint32_t crtcbits =
@@ -190,25 +197,64 @@ bool pidvd_video_present(pidvd_video_t *v, pidvd_frame_t *f,
         };
         drmWaitVBlank(v->fd, &w2);
     }
-    /* just past a vblank of the opposite parity: the flip below latches
-     * at the next boundary, which is the parity we want */
+
+    struct flip_evt evt = { .pending = true };
     if (drmModePageFlip(v->fd, v->crtc_id, v->buf[v->back].fb_id,
-                        DRM_MODE_PAGE_FLIP_EVENT, &v->flip_pending) < 0)
+                        DRM_MODE_PAGE_FLIP_EVENT, &evt) < 0)
         return false;
-    v->flip_pending = true;
 
     drmEventContext ev = {
         .version = 2,
         .page_flip_handler = flip_done,
     };
-    while (v->flip_pending) {
+    while (evt.pending) {
         struct pollfd p = { .fd = v->fd, .events = POLLIN };
         if (poll(&p, 1, 1000) <= 0)
             return false;
         drmHandleEvent(v->fd, &ev);
     }
     v->back ^= 1;
+
+    unsigned delta = evt.seq - v->last_flip_seq;
+    v->last_flip_seq = evt.seq;
+    v->delta_hist[delta <= 5 ? delta : 0]++;
+    if (++v->flips % 50 == 0) {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        double t = now.tv_sec + now.tv_nsec / 1e9;
+        double fps = v->t_last > 0 ? 50.0 / (t - v->t_last) : 0;
+        v->t_last = t;
+        fprintf(stderr, "video: flips=%ld fps=%.2f seq-deltas 1:%ld 2:%ld "
+                "3:%ld 4:%ld 5:%ld other:%ld (seq %u)\n",
+                v->flips, fps, v->delta_hist[1], v->delta_hist[2],
+                v->delta_hist[3], v->delta_hist[4], v->delta_hist[5],
+                v->delta_hist[0], evt.seq);
+    }
     return true;
+}
+
+void pidvd_video_vblprobe(pidvd_video_t *v, int n)
+{
+    uint32_t crtcbits =
+        (uint32_t)v->crtc_index << DRM_VBLANK_HIGH_CRTC_SHIFT;
+    unsigned prev = 0;
+    long prev_us = 0;
+    for (int i = 0; i < n; i++) {
+        drmVBlank w = {
+            .request = { .type = DRM_VBLANK_RELATIVE | crtcbits,
+                         .sequence = 1 },
+        };
+        if (drmWaitVBlank(v->fd, &w) != 0) {
+            fprintf(stderr, "vblprobe: wait failed\n");
+            return;
+        }
+        long us = (long)w.reply.tval_sec * 1000000 + w.reply.tval_usec;
+        fprintf(stderr, "vblprobe: seq=%u (+%u) dt=%ldus\n",
+                w.reply.sequence, w.reply.sequence - prev,
+                i ? (us - prev_us) : 0);
+        prev = w.reply.sequence;
+        prev_us = us;
+    }
 }
 
 void pidvd_video_close(pidvd_video_t *v)

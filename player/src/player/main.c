@@ -86,6 +86,15 @@ int main(int argc, char **argv)
         return 2;
     }
 
+    if (!strcmp(path, "--vblprobe")) {
+        pidvd_video_t *v = pidvd_video_open(PIDVD_STD_PAL);
+        if (!v)
+            return 1;
+        pidvd_video_vblprobe(v, 40);
+        pidvd_video_close(v);
+        return 0;
+    }
+
     pidvd_disc_t *d = pidvd_disc_open(path);
     if (!d)
         return 1;

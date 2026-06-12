@@ -32,6 +32,8 @@ pidvd_frame_t *pidvd_video_begin_frame(pidvd_video_t *v);
 bool pidvd_video_present(pidvd_video_t *v, pidvd_frame_t *f,
                          bool tff, bool rff);
 void pidvd_video_close(pidvd_video_t *v);
+/* diagnostic: print N successive vblank wait sequences/timings */
+void pidvd_video_vblprobe(pidvd_video_t *v, int n);
 
 /* ---- audio out ------------------------------------------------------- */
 typedef struct pidvd_audio pidvd_audio_t;

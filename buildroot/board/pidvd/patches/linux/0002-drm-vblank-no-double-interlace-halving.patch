@@ -1,0 +1,19 @@
+--- a/drivers/gpu/drm/drm_vblank.c
++++ b/drivers/gpu/drm/drm_vblank.c
+@@ -636,9 +636,14 @@
+ 		framedur_ns = div_u64((u64) frame_size * 1000000, dotclock);
+ 
+ 		/*
+-		 * Fields of interlaced scanout modes are only half a frame duration.
++		 * Fields of interlaced scanout modes are only half a frame
++		 * duration. PiDVD: vc4 supplies per-field crtc timings
++		 * already (CRTC_INTERLACE_HALVE_V), so halving again makes
++		 * the vblank count estimator register two vblanks per field
++		 * interrupt (+2 sequence/field), destroying parity meaning.
++		 * Skip the extra halving.
+ 		 */
+-		if (mode->flags & DRM_MODE_FLAG_INTERLACE)
++		if (0 && (mode->flags & DRM_MODE_FLAG_INTERLACE))
+ 			framedur_ns /= 2;
+ 	} else {
+ 		drm_err(dev, "crtc %u: Can't calculate constants, dotclock = 0!\n",
