@@ -44,11 +44,16 @@ static void drain(pidvd_vdec_t *d)
                 const mpeg2_picture_t *pic = d->info->display_picture;
                 bool tff = pic && (pic->flags & PIC_FLAG_TOP_FIELD_FIRST);
                 bool rff = pic && pic->nb_fields > 2;
-                d->cb(d->ctx, d->info->display_fbuf->buf[0],
-                      d->info->display_fbuf->buf[1],
-                      d->info->display_fbuf->buf[2],
-                      (int)d->info->sequence->width,
-                      (int)d->info->sequence->height, tff, rff);
+                {
+                    int64_t pts = -1;
+                    if (pic && (pic->flags & PIC_FLAG_TAGS))
+                        pts = ((int64_t)pic->tag2 << 32) | pic->tag;
+                    d->cb(d->ctx, d->info->display_fbuf->buf[0],
+                          d->info->display_fbuf->buf[1],
+                          d->info->display_fbuf->buf[2],
+                          (int)d->info->sequence->width,
+                          (int)d->info->sequence->height, tff, rff, pts);
+                }
             }
             break;
         default:
@@ -57,8 +62,11 @@ static void drain(pidvd_vdec_t *d)
     }
 }
 
-void pidvd_vdec_push(pidvd_vdec_t *d, const uint8_t *data, size_t len)
+void pidvd_vdec_push(pidvd_vdec_t *d, const uint8_t *data,
+                     size_t len, int64_t pts)
 {
+    if (pts >= 0)
+        mpeg2_tag_picture(d->dec, (uint32_t)pts, (uint32_t)(pts >> 32));
     while (len > 0) {
         size_t n = len < sizeof(d->chunk) ? len : sizeof(d->chunk);
         memcpy(d->chunk, data, n);

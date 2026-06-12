@@ -25,20 +25,24 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     pkg_check_modules(DRM REQUIRED IMPORTED_TARGET libdrm)
     pkg_check_modules(MPEG2 REQUIRED IMPORTED_TARGET libmpeg2 libmpeg2convert)
     pkg_check_modules(DVDNAV REQUIRED IMPORTED_TARGET dvdnav)
+    pkg_check_modules(ALSA REQUIRED IMPORTED_TARGET alsa)
 
     add_executable(pidvd-player
         src/player/main.c
         src/nav/engine.c
         src/demux/ps.c
         src/decode/video_mpeg2.c
+        src/decode/audio_a52.c
         src/decode/spu.c
         src/present/presenter.c
         platform/linux/video_kms.c
+        platform/linux/audio_alsa.c
         platform/linux/input_evdev.c
     )
     target_include_directories(pidvd-player PRIVATE platform)
     target_link_libraries(pidvd-player
-        pidvd_core PkgConfig::DRM PkgConfig::MPEG2 PkgConfig::DVDNAV pthread)
+        pidvd_core PkgConfig::DRM PkgConfig::MPEG2 PkgConfig::DVDNAV
+        PkgConfig::ALSA a52 m pthread)
 
     install(TARGETS pidvd-player dvdinfo RUNTIME DESTINATION bin)
 else()

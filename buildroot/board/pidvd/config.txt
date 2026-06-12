@@ -14,6 +14,8 @@ boot_delay=0
 dtoverlay=vc4-kms-v3d,composite=1
 # 16M starves the full start.elf (can fail to boot); 64M is safe with KMS
 gpu_mem=64
+# analog audio (headphone jack) for SCART/TV audio fallback
+dtparam=audio=on
 
 # Firmware-era norm for the pre-KMS splash only; once KMS takes over,
 # the norm comes from the kernel cmdline / connector property.

@@ -16,3 +16,9 @@ CONFIG_I2C_BCM2835=y
 CONFIG_SND=y
 CONFIG_SND_SOC=y
 CONFIG_SND_USB_AUDIO=y
+
+# Audio: bcm2835 (headphone jack fallback) built-in like everything
+# else; USB audio already =y above. Undervoltage sensor for power
+# diagnostics (dmesg + hwmon alarm).
+CONFIG_SND_BCM2835=y
+CONFIG_SENSORS_RASPBERRYPI_HWMON=y

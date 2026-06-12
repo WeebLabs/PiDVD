@@ -12,6 +12,7 @@
 #include <dvdnav/dvdnav.h>
 
 #include "core/disc.h"
+#include "decode/audio_a52.h"
 #include "decode/spu.h"
 #include "decode/video_mpeg2.h"
 #include "demux/ps.h"
@@ -21,6 +22,15 @@
 #define FRAME_W 720
 #define FRAME_H 576
 
+#define ARING 64   /* AC-3 frames of 32ms each ~= 2s */
+
+struct achunk {
+    int16_t pcm[1536 * 2];
+    int nframes;
+    int rate;
+    int64_t pts;
+};
+
 struct engine {
     dvdnav_t *nav;
     pidvd_video_t *video;
@@ -28,7 +38,18 @@ struct engine {
     pidvd_vdec_t *vdec;
     pidvd_spu_t *spu;
     pidvd_input_t *input;
+    pidvd_adec_t *adec;
     pidvd_ps_t ps;
+
+    /* audio thread + ring */
+    pthread_t audio_thread;
+    pthread_mutex_t a_lock;
+    pthread_cond_t a_cond;
+    struct achunk aring[ARING];
+    int a_head, a_tail, a_count;
+    bool a_run;
+    int cur_audio;          /* selected AC-3 substream */
+    int64_t vpts0;          /* first displayed video pts (start gate) */
 
     pidvd_standard_t std;
     /* last decoded frame (planar), kept for re-pushing during stills */
@@ -98,9 +119,12 @@ static double now_s(void)
 }
 
 static void on_frame(void *opaque, const uint8_t *y, const uint8_t *u,
-                     const uint8_t *v, int w, int h, bool tff, bool rff)
+                     const uint8_t *v, int w, int h, bool tff, bool rff,
+                     int64_t pts)
 {
     struct engine *e = opaque;
+    if (e->vpts0 < 0 && pts >= 0)
+        e->vpts0 = pts;
     double t = now_s();
     if (e->t_prev > 0) {
         double dt = t - e->t_prev;
@@ -132,19 +156,91 @@ static void on_frame(void *opaque, const uint8_t *y, const uint8_t *u,
     push_composed(e);
 }
 
-static void on_video_es(void *opaque, const uint8_t *data, size_t len)
+static void on_video_es(void *opaque, const uint8_t *data, size_t len,
+                        int64_t pts)
 {
     struct engine *e = opaque;
-    pidvd_vdec_push(e->vdec, data, len);
+    pidvd_vdec_push(e->vdec, data, len, pts);
 }
 
 static void on_spu_es(void *opaque, int substream, const uint8_t *data,
-                      size_t len)
+                      size_t len, int64_t pts)
 {
     struct engine *e = opaque;
+    (void)pts;   /* SPU display timing: with the A/V clock, later */
     pthread_mutex_lock(&e->spu_lock);
     pidvd_spu_packet(e->spu, substream, data, len);
     pthread_mutex_unlock(&e->spu_lock);
+}
+
+static void on_audio_es(void *opaque, int substream, const uint8_t *data,
+                        size_t len, int64_t pts)
+{
+    struct engine *e = opaque;
+    if (substream != e->cur_audio)
+        return;
+    pidvd_adec_push(e->adec, data, len, pts);
+}
+
+/* decoded AC-3 frames land in the ring (drop-oldest if full — audio
+ * must never stall the nav/decode thread) */
+static void on_audio_pcm(void *opaque, const int16_t *frames, int nframes,
+                         int rate, int64_t pts)
+{
+    struct engine *e = opaque;
+    /* start gate: drop audio from before the first displayed frame */
+    if (e->vpts0 < 0 || (pts >= 0 && pts < e->vpts0))
+        return;
+    pthread_mutex_lock(&e->a_lock);
+    if (e->a_count == ARING) {
+        e->a_tail = (e->a_tail + 1) % ARING;
+        e->a_count--;
+    }
+    struct achunk *c = &e->aring[e->a_head];
+    memcpy(c->pcm, frames, (size_t)nframes * 4);
+    c->nframes = nframes;
+    c->rate = rate;
+    c->pts = pts;
+    e->a_head = (e->a_head + 1) % ARING;
+    e->a_count++;
+    pthread_cond_signal(&e->a_cond);
+    pthread_mutex_unlock(&e->a_lock);
+}
+
+static void *audio_loop(void *opaque)
+{
+    struct engine *e = opaque;
+    pidvd_audio_t *out = NULL;
+    int rate = 0;
+    for (;;) {
+        pthread_mutex_lock(&e->a_lock);
+        while (e->a_count == 0 && e->a_run)
+            pthread_cond_wait(&e->a_cond, &e->a_lock);
+        if (!e->a_run && e->a_count == 0) {
+            pthread_mutex_unlock(&e->a_lock);
+            break;
+        }
+        struct achunk c = e->aring[e->a_tail];
+        e->a_tail = (e->a_tail + 1) % ARING;
+        e->a_count--;
+        pthread_mutex_unlock(&e->a_lock);
+
+        if (!out || rate != c.rate) {
+            if (out)
+                pidvd_audio_close(out);
+            out = pidvd_audio_open(PIDVD_AUDIO_PCM_STEREO, c.rate);
+            rate = c.rate;
+            if (!out) {
+                fprintf(stderr, "audio: output unavailable, muting\n");
+                e->a_run = false;
+                break;
+            }
+        }
+        pidvd_audio_write(out, c.pcm, c.nframes);
+    }
+    if (out)
+        pidvd_audio_close(out);
+    return NULL;
 }
 
 /* ---- highlight ------------------------------------------------------- */
@@ -226,12 +322,20 @@ int pidvd_nav_play(const char *iso_path)
                                    blend_overlay, &e);
     e.vdec = pidvd_vdec_new(on_frame, &e);
     e.spu = pidvd_spu_new();
+    e.adec = pidvd_adec_new(on_audio_pcm, &e);
     e.input = pidvd_input_open();
+    e.vpts0 = -1;
+    e.cur_audio = 0;
+    e.a_run = true;
+    pthread_mutex_init(&e.a_lock, NULL);
+    pthread_cond_init(&e.a_cond, NULL);
+    pthread_create(&e.audio_thread, NULL, audio_loop, &e);
     e.fy = calloc(1, FRAME_W * FRAME_H);
     e.fu = calloc(1, FRAME_W * FRAME_H / 4);
     e.fv = calloc(1, FRAME_W * FRAME_H / 4);
     pidvd_ps_init(&e.ps, on_video_es, &e);
     e.ps.spu_cb = on_spu_es;
+    e.ps.audio_cb = on_audio_es;
 
     bool running = true;
     unsigned tick = 0;
@@ -317,16 +421,28 @@ int pidvd_nav_play(const char *iso_path)
                 }
             }
             pidvd_vdec_reset(e.vdec);
+            pidvd_adec_reset(e.adec);
             pidvd_spu_clear(e.spu);
+            e.vpts0 = -1;
             break;
         }
         case DVDNAV_HOP_CHANNEL:
             pidvd_vdec_reset(e.vdec);
+            pidvd_adec_reset(e.adec);
             pidvd_spu_clear(e.spu);
+            e.vpts0 = -1;
             break;
+        case DVDNAV_AUDIO_STREAM_CHANGE: {
+            dvdnav_audio_stream_change_event_t *ev = (void *)blk;
+            int phys = (int8_t)ev->physical;
+            if (phys >= 0 && (phys & 7) != e.cur_audio) {
+                e.cur_audio = phys & 7;
+                pidvd_adec_reset(e.adec);
+            }
+            break;
+        }
         case DVDNAV_CELL_CHANGE:
-        case DVDNAV_AUDIO_STREAM_CHANGE:
-            break;   /* audio: milestone 2b */
+            break;
         case DVDNAV_STOP:
             running = false;
             break;
@@ -338,6 +454,12 @@ int pidvd_nav_play(const char *iso_path)
     }
 
     fprintf(stderr, "nav: stopped after %ld frames\n", e.frames);
+    pthread_mutex_lock(&e.a_lock);
+    e.a_run = false;
+    pthread_cond_broadcast(&e.a_cond);
+    pthread_mutex_unlock(&e.a_lock);
+    pthread_join(e.audio_thread, NULL);
+    pidvd_adec_free(e.adec);
     pidvd_input_close(e.input);
     long shown = pidvd_presenter_stop(e.pres);
     (void)shown;
