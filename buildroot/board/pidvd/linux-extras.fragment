@@ -22,20 +22,3 @@ CONFIG_SND_USB_AUDIO=y
 # diagnostics (dmesg + hwmon alarm).
 CONFIG_SND_BCM2835=y
 CONFIG_SENSORS_RASPBERRYPI_HWMON=y
-
-# Slim-down: subsystems a DVD appliance never touches. Smaller zImage
-# = faster load + init; nothing here is referenced by our stack.
-# CONFIG_BT is not set
-# CONFIG_CFG80211 is not set
-# CONFIG_MAC80211 is not set
-# CONFIG_MEDIA_SUPPORT is not set
-# CONFIG_NETFILTER is not set
-# CONFIG_IP_NF_IPTABLES is not set
-# CONFIG_IPV6 is not set
-# CONFIG_USB_GADGET is not set
-# CONFIG_SOUND_OSS_CORE is not set
-
-# Boot speed: appliance never throttles
-CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE=y
-# CONFIG_CPU_FREQ_DEFAULT_GOV_ONDEMAND is not set
-# CONFIG_CPU_FREQ_DEFAULT_GOV_POWERSAVE is not set

@@ -32,6 +32,7 @@ struct pidvd_video {
     int crtc_index;
     unsigned field_parity;   /* vblank-sequence parity flips latch on */
     bool progressive;        /* 240p/288p menu mode (decimated scanout) */
+    pidvd_standard_t std;    /* drives the VEC composite norm (NTSC/PAL) */
     drmModeModeInfo mode;
     struct kms_buf buf[2];
     uint8_t *scratch;        /* full-height render target (progressive) */
@@ -130,6 +131,39 @@ static void free_buffers(pidvd_video_t *v)
     v->scratch_h = 0;
 }
 
+/* Program the VEC composite norm to match the standard being displayed.
+ * The boot cmdline forces one norm (vc4.tv_norm=PAL); without this, a
+ * 240p NTSC menu would be encoded with PAL timing — malformed sync, the
+ * CRT can't lock (rolls). The norm lives in the connector's "TV mode"
+ * enum property (newer kernels) or legacy "mode"; set it per modeset.
+ * Best-effort: a missing/immutable property just leaves the boot norm. */
+static void set_tv_norm(pidvd_video_t *v, pidvd_standard_t std)
+{
+    const char *want = (std == PIDVD_STD_PAL) ? "PAL" : "NTSC";
+    drmModeObjectProperties *props = drmModeObjectGetProperties(
+        v->fd, v->conn_id, DRM_MODE_OBJECT_CONNECTOR);
+    if (!props)
+        return;
+    for (uint32_t i = 0; i < props->count_props; i++) {
+        drmModePropertyRes *p = drmModeGetProperty(v->fd, props->props[i]);
+        if (!p)
+            continue;
+        if ((p->flags & DRM_MODE_PROP_ENUM)
+            && (!strcmp(p->name, "TV mode") || !strcmp(p->name, "mode"))) {
+            for (int e = 0; e < p->count_enums; e++)
+                if (!strcmp(p->enums[e].name, want)) {
+                    if (drmModeObjectSetProperty(
+                            v->fd, v->conn_id, DRM_MODE_OBJECT_CONNECTOR,
+                            p->prop_id, p->enums[e].value) == 0)
+                        fprintf(stderr, "video: VEC norm -> %s\n", want);
+                    break;
+                }
+        }
+        drmModeFreeProperty(p);
+    }
+    drmModeFreeObjectProperties(props);
+}
+
 /* Allocate scanout buffers for the current mode (plus a full-height
  * scratch when progressive) and program the CRTC. */
 static bool setup_mode(pidvd_video_t *v)
@@ -146,6 +180,8 @@ static bool setup_mode(pidvd_video_t *v)
         if (!v->scratch)
             return false;
     }
+    /* Match the composite norm to the mode before the modeset latches. */
+    set_tv_norm(v, v->std);
     if (drmModeSetCrtc(v->fd, v->crtc_id, v->buf[0].fb_id, 0, 0,
                        &v->conn_id, 1, &v->mode) < 0) {
         fprintf(stderr, "video: modeset failed: %s\n", strerror(errno));
@@ -160,6 +196,7 @@ static bool setup_mode(pidvd_video_t *v)
 static bool select_mode(pidvd_video_t *v, pidvd_standard_t std,
                         pidvd_scan_t scan)
 {
+    v->std = std;
     bool want_prog = (scan == PIDVD_SCAN_PROGRESSIVE);
     if (want_prog && pick_mode(v, std, true)) {
         v->progressive = true;
