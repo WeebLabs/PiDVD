@@ -7,10 +7,10 @@ enable_uart=1
 disable_overscan=1
 disable_splash=1
 boot_delay=0
-# full ARM clock during boot (otherwise 600MHz until the governor wakes)
-initial_turbo=30
-# skip HAT EEPROM probe at power-on
-force_eeprom_read=0
+# NOTE: do NOT add initial_turbo here. It overrides enable_uart's
+# core_freq lock, which desyncs the Pi 3 mini-UART baud — garbled serial
+# for the whole boot — and left the board unstable/off-network
+# (2026-06-13 incident). Reintroduce only with serial attached to verify.
 
 # Full KMS — the vc4 driver owns the VEC/DPI/pixel valves.
 # composite=1 is required: the overlay disables the VEC by default
