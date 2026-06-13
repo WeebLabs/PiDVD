@@ -14,22 +14,32 @@ pixel-honest 720-wide fields and respect interlace physics (below).
 
 ## 1. Canvas and interlace rules
 
-The UI renders through the same `pidvd_video` path as the player: a weaved
-XRGB frame at 720×576 (PAL) or 720×480 (NTSC), true interlaced scanout.
-
-- **Picker mode selection**: the picker comes up in the standard of the last
-  disc played (persisted), else PAL. It never modesets per-selection; the
-  modeset happens when playback starts.
-- **Safe area**: all UI lives inside title-safe — 48 px horizontal margins,
-  38 px (PAL) / 32 px (NTSC) vertical margins → a working canvas of
-  **624×500** (PAL) / **624×416** (NTSC). One layout, vertical regions flex.
-- **Interlace law #1 — no 1-line horizontals.** Any horizontal stroke,
-  rule, or glyph row must span **≥ 2 frame lines**, or it lives in one field
-  and strobes at 25/30 Hz. Consequence: every font is rendered with each
-  glyph row doubled (1 font pixel = 2 scanlines), and box rules are 2 px.
-- **Interlace law #2 — vertical motion moves in 2-line steps.** The
-  selection bar slide and any vertical animation step by even scanline
-  counts. Horizontal motion (marquee) is unconstrained.
+- **Menu mode is fixed: 240p NTSC, always.** The picker is *always* a
+  progressive 240p NTSC mode — one rock-steady, flicker-free menu that
+  never changes while you browse. Playback is the only thing that
+  modesets: when a disc starts, the nav engine switches to the disc's own
+  native **480i / 576i** (chosen from the IFO video standard, not the
+  region code); on STOP the picker re-opens 240p NTSC. The menu never
+  follows the disc's standard — it's a constant.
+- **How 240p is rendered.** The layout is authored once at 720×480 (the
+  NTSC interlaced geometry) and the video backend decimates it 2:1 into
+  the real 720×240 progressive scanout. So all UI code stays
+  resolution-agnostic, and — because the menu is interlace-safe (below) —
+  the 2:1 decimation is lossless: crisp native 240p. If the VEC can't
+  offer 240p, the backend falls back to 480i rather than going dark.
+- **Safe area**: all UI lives inside title-safe — 48 px horizontal
+  margins, 32 px vertical → a working canvas of **624×416** at the 720×480
+  authoring height. One layout, vertical regions flex.
+- **Law #1 — no 1-line horizontals.** Any horizontal stroke, rule, or
+  glyph row must span **≥ 2 authoring lines**. Originally an interlace
+  rule (a 1-line feature would strobe between fields); it now *also*
+  guarantees the 2:1 decimation to 240p loses nothing. Every font is
+  rendered with each glyph row doubled (1 font pixel = 2 lines), box rules
+  are 2 px.
+- **Law #2 — vertical motion moves in 2-line steps.** The selection bar
+  slide and any vertical animation step by even line counts (so they
+  survive decimation cleanly). Horizontal motion (marquee) is
+  unconstrained.
 - **Brightness law**: no large fields of peak white/amber (CRT bloom +
   phosphor wear on an appliance that may sit on a menu for hours). The
   selection bar uses mid-amber fill; peak brightness is reserved for small
@@ -279,7 +289,6 @@ from ATTRACT. Same chrome as BROWSE; one centered panel:
 
    THEME             ◂ AMBER & ICE ▸
    LAYOUT            ◂ CONSOLE ▸
-   PICKER MODE       ◂ AUTO · LAST DISC ▸
    AUDIO OUTPUT      ◂ STEREO DOWNMIX ▸
    ATTRACT DIM       ◂ AFTER 15 MIN ▸
    RESCAN CATALOG    ⏎
@@ -293,10 +302,10 @@ from ATTRACT. Same chrome as BROWSE; one centered panel:
   the value only. LEFT/RIGHT cycle a value and it applies **instantly** —
   flipping themes/layouts live on the CRT is half the fun. ENTER fires
   action rows (rescan). MENU or STOP exits.
-- Values: THEME (§2 four), LAYOUT (CONSOLE/MARQUEE/LEDGER), PICKER MODE
-  (AUTO · LAST DISC / PAL / NTSC — the picker's own video mode), AUDIO
-  OUTPUT (STEREO DOWNMIX / AC-3 PASSTHROUGH), ATTRACT DIM (OFF / 5 / 15 /
-  30 MIN — blanks to the drifting logo bug, CRT burn-in kindness).
+- Values: THEME (§2 four), LAYOUT (CONSOLE/MARQUEE/LEDGER), AUDIO OUTPUT
+  (STEREO DOWNMIX / AC-3 PASSTHROUGH), ATTRACT DIM (OFF / 5 / 15 / 30 MIN —
+  blanks to the drifting logo bug, CRT burn-in kindness). There is *no*
+  menu-mode setting: the menu is always 240p NTSC (§1).
 - **Persistence**: `pidvd.cfg` (`key=value`) on the SD boot partition —
   the appliance's NVRAM, independent of whatever drive is inserted.
   Write path: remount rw → write → sync → remount ro; failure degrades

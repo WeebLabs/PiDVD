@@ -121,7 +121,6 @@ render_settings() {
     echo
     say "   ${D}THEME             ${SB}${SF} ◂ AMBER & ICE ▸ ${X}"
     say "   ${D}LAYOUT             ${B}◂ CONSOLE ▸${X}"
-    say "   ${D}PICKER MODE        ${B}◂ AUTO · LAST DISC ▸${X}"
     say "   ${D}AUDIO OUTPUT       ${B}◂ STEREO DOWNMIX ▸${X}"
     say "   ${D}ATTRACT DIM        ${B}◂ AFTER 15 MIN ▸${X}"
     say "   ${D}RESCAN CATALOG     ${B}↵${X}"

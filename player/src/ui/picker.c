@@ -55,24 +55,17 @@ static void drive_eject(void)
 
 /* ---- the loop ---------------------------------------------------------- */
 
-static pidvd_standard_t picker_standard(const ui_settings_t *set)
-{
-    if (set->picker_mode == 1) return PIDVD_STD_PAL;
-    if (set->picker_mode == 2) return PIDVD_STD_NTSC;
-    return set->last_standard ? PIDVD_STD_PAL : PIDVD_STD_NTSC;
-}
+/* The menu is ALWAYS 240p NTSC — one fixed, flicker-free progressive
+ * mode, never modeset while browsing. Playback (the nav engine) opens
+ * the disc's native 480i/576i; returning here re-opens 240p NTSC. The
+ * menu canvas is rendered at 720x480 and decimated 2:1 to 720x240 by
+ * the video backend, so the layout is the NTSC variant. */
+#define MENU_STD  PIDVD_STD_NTSC
+#define MENU_ROWS_H 480   /* logical render height (NTSC layout) */
 
 typedef struct {
     pidvd_video_t *video;
-    pidvd_standard_t std;
 } vout_t;
-
-static void vout_match(vout_t *vo, const ui_settings_t *set)
-{
-    pidvd_standard_t want = picker_standard(set);
-    if (want != vo->std && pidvd_video_set_standard(vo->video, want))
-        vo->std = want;
-}
 
 static void present(vout_t *vo, const ui_view_t *view)
 {
@@ -88,8 +81,7 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
                       char *iso_out, size_t cap)
 {
     vout_t vo;
-    vo.std = picker_standard(set);
-    vo.video = pidvd_video_open(vo.std);
+    vo.video = pidvd_video_open_mode(MENU_STD, PIDVD_SCAN_PROGRESSIVE);
     if (!vo.video)
         return -1;
     pidvd_input_t *in = pidvd_input_open();
@@ -143,17 +135,15 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
                 break;
             case PIDVD_KEY_LEFT:
                 ui_settings_cycle(set, view.set_sel, -1);
-                vout_match(&vo, set);
                 break;
             case PIDVD_KEY_RIGHT:
                 ui_settings_cycle(set, view.set_sel, +1);
-                vout_match(&vo, set);
                 break;
             case PIDVD_KEY_ENTER:
                 if (view.set_sel == UI_SET_RESCAN && cat)
                     catalog_rescan(cat);
-                else if (ui_settings_cycle(set, view.set_sel, +1))
-                    vout_match(&vo, set);
+                else
+                    ui_settings_cycle(set, view.set_sel, +1);
                 break;
             case PIDVD_KEY_MENU:
             case PIDVD_KEY_STOP:
@@ -167,7 +157,7 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
             catalog_lock(cat);
             int n = catalog_count(cat);
             catalog_unlock(cat);
-            int rows = pidvd_ui_visible_rows(&view, vo.std ? 576 : 480);
+            int rows = pidvd_ui_visible_rows(&view, MENU_ROWS_H);
             if (rows < 1)
                 rows = 1;
             bool wrap = (set->layout == UI_MARQUEE);

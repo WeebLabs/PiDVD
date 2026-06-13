@@ -22,9 +22,25 @@ typedef struct {
     int      stride;
 } pidvd_frame_t;
 
-pidvd_video_t *pidvd_video_open(pidvd_standard_t std);
+/* Scan: playback is always interlaced (the disc's native field cadence).
+ * The picker may request progressive — 240p (NTSC) / 288p (PAL) — for a
+ * rock-steady, flicker-free menu. In progressive mode the caller still
+ * renders a full-height (480/576) frame; the backend decimates it 2:1
+ * into the half-height scanout buffer, so render code is scan-agnostic.
+ * If a progressive mode isn't available, the backend falls back to
+ * interlaced rather than failing. */
+typedef enum {
+    PIDVD_SCAN_INTERLACED,
+    PIDVD_SCAN_PROGRESSIVE,
+} pidvd_scan_t;
+
+pidvd_video_t *pidvd_video_open(pidvd_standard_t std); /* interlaced */
+pidvd_video_t *pidvd_video_open_mode(pidvd_standard_t std, pidvd_scan_t scan);
 /* Switch standard at a VTS boundary (mixed discs). Full modeset. */
 bool pidvd_video_set_standard(pidvd_video_t *v, pidvd_standard_t std);
+/* Switch standard and/or scan (the picker's live settings toggle). */
+bool pidvd_video_set_mode(pidvd_video_t *v, pidvd_standard_t std,
+                          pidvd_scan_t scan);
 /* Acquire the next back buffer to decode into. */
 pidvd_frame_t *pidvd_video_begin_frame(pidvd_video_t *v);
 /* Queue the frame; tff/rff come from the MPEG-2 picture flags and drive

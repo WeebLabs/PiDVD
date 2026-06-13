@@ -31,8 +31,11 @@ struct pidvd_video {
     uint32_t crtc_id;
     int crtc_index;
     unsigned field_parity;   /* vblank-sequence parity flips latch on */
+    bool progressive;        /* 240p/288p menu mode (decimated scanout) */
     drmModeModeInfo mode;
     struct kms_buf buf[2];
+    uint8_t *scratch;        /* full-height render target (progressive) */
+    int scratch_h;           /* 2 * vdisplay when progressive, else 0 */
     int back;            /* index handed out by begin_frame */
     bool flip_pending;
     pidvd_frame_t frame;
@@ -64,9 +67,13 @@ static int create_buf(int fd, int w, int h, struct kms_buf *b)
     return 0;
 }
 
-static bool pick_mode(pidvd_video_t *v, pidvd_standard_t std)
+/* Find a Composite mode for the requested standard and scan. Interlaced:
+ * 480i/576i. Progressive: 240p/288p (half the active lines, no interlace
+ * flag). Sets v->mode/conn/crtc on success. */
+static bool pick_mode(pidvd_video_t *v, pidvd_standard_t std, bool progressive)
 {
-    int want_v = (std == PIDVD_STD_PAL) ? 576 : 480;
+    int want_v = progressive ? ((std == PIDVD_STD_PAL) ? 288 : 240)
+                             : ((std == PIDVD_STD_PAL) ? 576 : 480);
     drmModeRes *res = drmModeGetResources(v->fd);
     if (!res)
         return false;
@@ -79,8 +86,8 @@ static bool pick_mode(pidvd_video_t *v, pidvd_standard_t std)
             && c->connection == DRM_MODE_CONNECTED) {
             for (int m = 0; m < c->count_modes; m++) {
                 drmModeModeInfo *mi = &c->modes[m];
-                if ((mi->flags & DRM_MODE_FLAG_INTERLACE)
-                    && mi->vdisplay == want_v) {
+                bool mi_int = (mi->flags & DRM_MODE_FLAG_INTERLACE) != 0;
+                if (mi_int == !progressive && mi->vdisplay == want_v) {
                     v->conn_id = c->connector_id;
                     v->mode = *mi;
                     /* take the encoder's CRTC, or the first one */
@@ -104,7 +111,72 @@ static bool pick_mode(pidvd_video_t *v, pidvd_standard_t std)
     return found;
 }
 
-pidvd_video_t *pidvd_video_open(pidvd_standard_t std)
+static void free_buffers(pidvd_video_t *v)
+{
+    for (int i = 0; i < 2; i++) {
+        struct kms_buf *b = &v->buf[i];
+        if (b->map && b->map != MAP_FAILED)
+            munmap(b->map, b->size);
+        if (b->fb_id)
+            drmModeRmFB(v->fd, b->fb_id);
+        if (b->handle) {
+            struct drm_mode_destroy_dumb dreq = { .handle = b->handle };
+            ioctl(v->fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dreq);
+        }
+        memset(b, 0, sizeof(*b));
+    }
+    free(v->scratch);
+    v->scratch = NULL;
+    v->scratch_h = 0;
+}
+
+/* Allocate scanout buffers for the current mode (plus a full-height
+ * scratch when progressive) and program the CRTC. */
+static bool setup_mode(pidvd_video_t *v)
+{
+    for (int i = 0; i < 2; i++)
+        if (create_buf(v->fd, v->mode.hdisplay, v->mode.vdisplay,
+                       &v->buf[i]) < 0) {
+            fprintf(stderr, "video: dumb buffer: %s\n", strerror(errno));
+            return false;
+        }
+    if (v->progressive) {
+        v->scratch_h = v->mode.vdisplay * 2;
+        v->scratch = calloc((size_t)v->mode.hdisplay * v->scratch_h, 4);
+        if (!v->scratch)
+            return false;
+    }
+    if (drmModeSetCrtc(v->fd, v->crtc_id, v->buf[0].fb_id, 0, 0,
+                       &v->conn_id, 1, &v->mode) < 0) {
+        fprintf(stderr, "video: modeset failed: %s\n", strerror(errno));
+        return false;
+    }
+    v->back = 1;
+    return true;
+}
+
+/* Pick std/scan, with automatic fallback from progressive to interlaced
+ * when the VEC doesn't expose a 240p/288p mode. Updates v->progressive. */
+static bool select_mode(pidvd_video_t *v, pidvd_standard_t std,
+                        pidvd_scan_t scan)
+{
+    bool want_prog = (scan == PIDVD_SCAN_PROGRESSIVE);
+    if (want_prog && pick_mode(v, std, true)) {
+        v->progressive = true;
+        return true;
+    }
+    if (want_prog)
+        fprintf(stderr, "video: no progressive %s mode on Composite-1, "
+                        "falling back to interlaced\n",
+                pidvd_standard_name(std));
+    if (pick_mode(v, std, false)) {
+        v->progressive = false;
+        return true;
+    }
+    return false;
+}
+
+pidvd_video_t *pidvd_video_open_mode(pidvd_standard_t std, pidvd_scan_t scan)
 {
     pidvd_video_t *v = calloc(1, sizeof(*v));
     v->fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
@@ -113,45 +185,56 @@ pidvd_video_t *pidvd_video_open(pidvd_standard_t std)
                 strerror(errno));
         goto fail;
     }
-    if (!pick_mode(v, std)) {
-        fprintf(stderr, "video: no connected interlaced %s mode on "
-                        "Composite-1\n", pidvd_standard_name(std));
+    if (!select_mode(v, std, scan)) {
+        fprintf(stderr, "video: no connected %s mode on Composite-1\n",
+                pidvd_standard_name(std));
         goto fail;
     }
-    for (int i = 0; i < 2; i++)
-        if (create_buf(v->fd, v->mode.hdisplay, v->mode.vdisplay,
-                       &v->buf[i]) < 0) {
-            fprintf(stderr, "video: dumb buffer: %s\n", strerror(errno));
-            goto fail;
-        }
-    if (drmModeSetCrtc(v->fd, v->crtc_id, v->buf[0].fb_id, 0, 0,
-                       &v->conn_id, 1, &v->mode) < 0) {
-        fprintf(stderr, "video: modeset failed: %s\n", strerror(errno));
+    if (!setup_mode(v))
         goto fail;
-    }
     const char *par = getenv("PIDVD_FIELD_PARITY");
     v->field_parity = (par && par[0] == '1') ? 1 : 0;
     fprintf(stderr, "video: %s %ux%u%s on Composite-1, field parity %u\n",
             v->mode.name, v->mode.hdisplay, v->mode.vdisplay,
-            (v->mode.flags & DRM_MODE_FLAG_INTERLACE) ? "i" : "p",
-            v->field_parity);
-    v->back = 1;
+            v->progressive ? "p" : "i", v->field_parity);
     return v;
 fail:
     pidvd_video_close(v);
     return NULL;
 }
 
+pidvd_video_t *pidvd_video_open(pidvd_standard_t std)
+{
+    return pidvd_video_open_mode(std, PIDVD_SCAN_INTERLACED);
+}
+
+bool pidvd_video_set_mode(pidvd_video_t *v, pidvd_standard_t std,
+                          pidvd_scan_t scan)
+{
+    free_buffers(v);
+    if (!select_mode(v, std, scan) || !setup_mode(v))
+        return false;
+    fprintf(stderr, "video: switched to %s %ux%u%s\n", v->mode.name,
+            v->mode.hdisplay, v->mode.vdisplay, v->progressive ? "p" : "i");
+    return true;
+}
+
 bool pidvd_video_set_standard(pidvd_video_t *v, pidvd_standard_t std)
 {
-    if (!pick_mode(v, std))
-        return false;
-    return drmModeSetCrtc(v->fd, v->crtc_id, v->buf[v->back ^ 1].fb_id,
-                          0, 0, &v->conn_id, 1, &v->mode) == 0;
+    return pidvd_video_set_mode(v, std, PIDVD_SCAN_INTERLACED);
 }
 
 pidvd_frame_t *pidvd_video_begin_frame(pidvd_video_t *v)
 {
+    if (v->progressive) {
+        /* Caller renders full height; present() decimates 2:1 into the
+         * half-height scanout buffer. Render stays scan-agnostic. */
+        v->frame.pixels = v->scratch;
+        v->frame.width = v->mode.hdisplay;
+        v->frame.height = v->scratch_h;
+        v->frame.stride = v->mode.hdisplay * 4;
+        return &v->frame;
+    }
     struct kms_buf *b = &v->buf[v->back];
     v->frame.pixels = b->map;
     v->frame.width = v->mode.hdisplay;
@@ -183,19 +266,32 @@ bool pidvd_video_present(pidvd_video_t *v, pidvd_frame_t *f,
      * TODO(field-sched): rff (NTSC 3:2) = hold one extra field. */
     (void)tff; (void)rff;
 
-    uint32_t crtcbits =
-        (uint32_t)v->crtc_index << DRM_VBLANK_HIGH_CRTC_SHIFT;
-    drmVBlank w = {
-        .request = { .type = DRM_VBLANK_RELATIVE | crtcbits,
-                     .sequence = 1 },
-    };
-    if (drmWaitVBlank(v->fd, &w) == 0
-        && ((w.reply.sequence + 1) & 1) != v->field_parity) {
-        drmVBlank w2 = {
+    if (v->progressive) {
+        /* Decimate the full-height render into the half-height scanout
+         * buffer: every other line. The menu is interlace-safe (no
+         * sub-2-line feature), so this is lossless for its content and
+         * yields a crisp native 240p/288p image. No field parity in a
+         * progressive mode — one flip per vblank. */
+        struct kms_buf *b = &v->buf[v->back];
+        int bpl = v->mode.hdisplay * 4;
+        for (int y = 0; y < v->mode.vdisplay; y++)
+            memcpy(b->map + (size_t)y * b->pitch,
+                   v->scratch + (size_t)(2 * y) * bpl, (size_t)bpl);
+    } else {
+        uint32_t crtcbits =
+            (uint32_t)v->crtc_index << DRM_VBLANK_HIGH_CRTC_SHIFT;
+        drmVBlank w = {
             .request = { .type = DRM_VBLANK_RELATIVE | crtcbits,
                          .sequence = 1 },
         };
-        drmWaitVBlank(v->fd, &w2);
+        if (drmWaitVBlank(v->fd, &w) == 0
+            && ((w.reply.sequence + 1) & 1) != v->field_parity) {
+            drmVBlank w2 = {
+                .request = { .type = DRM_VBLANK_RELATIVE | crtcbits,
+                             .sequence = 1 },
+            };
+            drmWaitVBlank(v->fd, &w2);
+        }
     }
 
     struct flip_evt evt = { .pending = true };
@@ -261,17 +357,8 @@ void pidvd_video_close(pidvd_video_t *v)
 {
     if (!v)
         return;
-    for (int i = 0; i < 2; i++) {
-        struct kms_buf *b = &v->buf[i];
-        if (b->map && b->map != MAP_FAILED)
-            munmap(b->map, b->size);
-        if (b->fb_id)
-            drmModeRmFB(v->fd, b->fb_id);
-        if (b->handle) {
-            struct drm_mode_destroy_dumb dreq = { .handle = b->handle };
-            ioctl(v->fd, DRM_IOCTL_MODE_DESTROY_DUMB, &dreq);
-        }
-    }
+    if (v->fd >= 0)
+        free_buffers(v);
     if (v->fd >= 0)
         close(v->fd);
     free(v);
