@@ -118,6 +118,24 @@ static double now_s(void)
     return ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
+static pidvd_standard_t initial_standard(const char *iso_path)
+{
+    pidvd_standard_t std = PIDVD_STD_NTSC;
+    pidvd_disc_t *d = pidvd_disc_open(iso_path);
+    if (!d) {
+        fprintf(stderr, "nav: could not inspect disc standard; "
+                        "starting in NTSC\n");
+        return std;
+    }
+
+    bool mixed = false;
+    std = pidvd_disc_standard(d, &mixed);
+    fprintf(stderr, "nav: initial output -> %s%s\n",
+            pidvd_standard_name(std), mixed ? " (mixed)" : "");
+    pidvd_disc_close(d);
+    return std;
+}
+
 static void on_frame(void *opaque, const uint8_t *y, const uint8_t *u,
                      const uint8_t *v, int w, int h, bool tff, bool rff,
                      int64_t pts)
@@ -315,7 +333,7 @@ int pidvd_nav_play(const char *iso_path)
     dvdnav_set_readahead_flag(e.nav, 1);
     dvdnav_set_PGC_positioning_flag(e.nav, 1);
 
-    e.std = PIDVD_STD_PAL;   /* corrected on first VTS change */
+    e.std = initial_standard(iso_path);
     e.video = pidvd_video_open(e.std);
     if (!e.video)
         return 1;

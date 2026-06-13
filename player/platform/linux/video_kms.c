@@ -68,13 +68,73 @@ static int create_buf(int fd, int w, int h, struct kms_buf *b)
     return 0;
 }
 
+static bool composite_usable(const drmModeConnector *c)
+{
+    /* vc4's composite connector cannot hotplug-detect a CRT, so the kernel
+     * reports UNKNOWN unless a video=...:e boot arg forced it on. Treat both
+     * as usable; DISCONNECTED is the only hard no. */
+    return c->connector_type == DRM_MODE_CONNECTOR_Composite
+        && c->connection != DRM_MODE_DISCONNECTED;
+}
+
+static bool mode_matches(pidvd_standard_t std, bool progressive,
+                         const drmModeModeInfo *mi)
+{
+    int want_v = progressive ? ((std == PIDVD_STD_PAL) ? 288 : 240)
+                             : ((std == PIDVD_STD_PAL) ? 576 : 480);
+    int want_htotal = (std == PIDVD_STD_PAL) ? 864 : 858;
+    int want_vtotal = progressive ? ((std == PIDVD_STD_PAL) ? 312 : 262)
+                                  : ((std == PIDVD_STD_PAL) ? 625 : 525);
+    bool mi_int = (mi->flags & DRM_MODE_FLAG_INTERLACE) != 0;
+
+    return mi_int == !progressive
+        && mi->hdisplay == 720
+        && mi->vdisplay == want_v
+        && mi->clock == 13500
+        && mi->htotal == want_htotal
+        && mi->vtotal == want_vtotal;
+}
+
+static bool choose_crtc(pidvd_video_t *v, drmModeRes *res,
+                        const drmModeConnector *c)
+{
+    drmModeEncoder *e = c->encoder_id
+        ? drmModeGetEncoder(v->fd, c->encoder_id) : NULL;
+    if (e && e->crtc_id) {
+        v->crtc_id = e->crtc_id;
+        for (int k = 0; k < res->count_crtcs; k++) {
+            if (res->crtcs[k] == v->crtc_id) {
+                v->crtc_index = k;
+                drmModeFreeEncoder(e);
+                return true;
+            }
+        }
+    }
+    if (e)
+        drmModeFreeEncoder(e);
+
+    for (int i = 0; i < c->count_encoders; i++) {
+        e = drmModeGetEncoder(v->fd, c->encoders[i]);
+        if (!e)
+            continue;
+        for (int k = 0; k < res->count_crtcs; k++) {
+            if (e->possible_crtcs & (1u << k)) {
+                v->crtc_id = res->crtcs[k];
+                v->crtc_index = k;
+                drmModeFreeEncoder(e);
+                return true;
+            }
+        }
+        drmModeFreeEncoder(e);
+    }
+    return false;
+}
+
 /* Find a Composite mode for the requested standard and scan. Interlaced:
  * 480i/576i. Progressive: 240p/288p (half the active lines, no interlace
  * flag). Sets v->mode/conn/crtc on success. */
 static bool pick_mode(pidvd_video_t *v, pidvd_standard_t std, bool progressive)
 {
-    int want_v = progressive ? ((std == PIDVD_STD_PAL) ? 288 : 240)
-                             : ((std == PIDVD_STD_PAL) ? 576 : 480);
     drmModeRes *res = drmModeGetResources(v->fd);
     if (!res)
         return false;
@@ -83,24 +143,14 @@ static bool pick_mode(pidvd_video_t *v, pidvd_standard_t std, bool progressive)
         drmModeConnector *c = drmModeGetConnector(v->fd, res->connectors[i]);
         if (!c)
             continue;
-        if (c->connector_type == DRM_MODE_CONNECTOR_Composite
-            && c->connection == DRM_MODE_CONNECTED) {
+        if (composite_usable(c)) {
             for (int m = 0; m < c->count_modes; m++) {
                 drmModeModeInfo *mi = &c->modes[m];
-                bool mi_int = (mi->flags & DRM_MODE_FLAG_INTERLACE) != 0;
-                if (mi_int == !progressive && mi->vdisplay == want_v) {
+                if (mode_matches(std, progressive, mi)) {
                     v->conn_id = c->connector_id;
+                    if (!choose_crtc(v, res, c))
+                        continue;
                     v->mode = *mi;
-                    /* take the encoder's CRTC, or the first one */
-                    drmModeEncoder *e = c->encoder_id
-                        ? drmModeGetEncoder(v->fd, c->encoder_id) : NULL;
-                    v->crtc_id = (e && e->crtc_id) ? e->crtc_id
-                                                   : res->crtcs[0];
-                    if (e)
-                        drmModeFreeEncoder(e);
-                    for (int k = 0; k < res->count_crtcs; k++)
-                        if (res->crtcs[k] == v->crtc_id)
-                            v->crtc_index = k;
                     found = true;
                     break;
                 }
@@ -132,36 +182,54 @@ static void free_buffers(pidvd_video_t *v)
 }
 
 /* Program the VEC composite norm to match the standard being displayed.
- * The boot cmdline forces one norm (vc4.tv_norm=PAL); without this, a
- * 240p NTSC menu would be encoded with PAL timing — malformed sync, the
- * CRT can't lock (rolls). The norm lives in the connector's "TV mode"
- * enum property (newer kernels) or legacy "mode"; set it per modeset.
- * Best-effort: a missing/immutable property just leaves the boot norm. */
-static void set_tv_norm(pidvd_video_t *v, pidvd_standard_t std)
+ * The boot cmdline only supplies a default norm; playback can switch
+ * NTSC<->PAL. If the norm and mode disagree, the VEC emits malformed
+ * composite timing/color and the CRT can't lock. The norm lives in the
+ * connector's "TV mode" enum property (newer kernels) or legacy "mode";
+ * set it per modeset. */
+static bool set_tv_norm(pidvd_video_t *v, pidvd_standard_t std)
 {
     const char *want = (std == PIDVD_STD_PAL) ? "PAL" : "NTSC";
+    bool found = false;
+    bool ok = false;
     drmModeObjectProperties *props = drmModeObjectGetProperties(
         v->fd, v->conn_id, DRM_MODE_OBJECT_CONNECTOR);
     if (!props)
-        return;
+        return false;
     for (uint32_t i = 0; i < props->count_props; i++) {
         drmModePropertyRes *p = drmModeGetProperty(v->fd, props->props[i]);
         if (!p)
             continue;
         if ((p->flags & DRM_MODE_PROP_ENUM)
             && (!strcmp(p->name, "TV mode") || !strcmp(p->name, "mode"))) {
-            for (int e = 0; e < p->count_enums; e++)
+            found = true;
+            for (int e = 0; e < p->count_enums; e++) {
                 if (!strcmp(p->enums[e].name, want)) {
-                    if (drmModeObjectSetProperty(
-                            v->fd, v->conn_id, DRM_MODE_OBJECT_CONNECTOR,
-                            p->prop_id, p->enums[e].value) == 0)
-                        fprintf(stderr, "video: VEC norm -> %s\n", want);
+                    if (drmModeObjectSetProperty(v->fd, v->conn_id,
+                            DRM_MODE_OBJECT_CONNECTOR, p->prop_id,
+                            p->enums[e].value) == 0) {
+                        fprintf(stderr, "video: VEC norm -> %s (%s)\n",
+                                want, p->name);
+                        ok = true;
+                    } else {
+                        fprintf(stderr, "video: VEC norm %s via %s failed: "
+                                "%s\n", want, p->name, strerror(errno));
+                    }
                     break;
                 }
+            }
         }
         drmModeFreeProperty(p);
+        if (ok)
+            break;
     }
     drmModeFreeObjectProperties(props);
+    if (!found)
+        fprintf(stderr, "video: warning: no VEC TV mode property found\n");
+    else if (!ok)
+        fprintf(stderr, "video: warning: could not set VEC norm to %s\n",
+                want);
+    return ok;
 }
 
 /* Allocate scanout buffers for the current mode (plus a full-height
@@ -231,9 +299,12 @@ pidvd_video_t *pidvd_video_open_mode(pidvd_standard_t std, pidvd_scan_t scan)
         goto fail;
     const char *par = getenv("PIDVD_FIELD_PARITY");
     v->field_parity = (par && par[0] == '1') ? 1 : 0;
-    fprintf(stderr, "video: %s %ux%u%s on Composite-1, field parity %u\n",
+    fprintf(stderr, "video: %s %ux%u%s %.3f MHz htotal=%u vtotal=%u "
+            "flags=0x%x on Composite-1, field parity %u\n",
             v->mode.name, v->mode.hdisplay, v->mode.vdisplay,
-            v->progressive ? "p" : "i", v->field_parity);
+            v->progressive ? "p" : "i", v->mode.clock / 1000.0,
+            v->mode.htotal, v->mode.vtotal, v->mode.flags,
+            v->field_parity);
     return v;
 fail:
     pidvd_video_close(v);
@@ -251,8 +322,11 @@ bool pidvd_video_set_mode(pidvd_video_t *v, pidvd_standard_t std,
     free_buffers(v);
     if (!select_mode(v, std, scan) || !setup_mode(v))
         return false;
-    fprintf(stderr, "video: switched to %s %ux%u%s\n", v->mode.name,
-            v->mode.hdisplay, v->mode.vdisplay, v->progressive ? "p" : "i");
+    fprintf(stderr, "video: switched to %s %ux%u%s %.3f MHz htotal=%u "
+            "vtotal=%u flags=0x%x\n", v->mode.name, v->mode.hdisplay,
+            v->mode.vdisplay, v->progressive ? "p" : "i",
+            v->mode.clock / 1000.0, v->mode.htotal, v->mode.vtotal,
+            v->mode.flags);
     return true;
 }
 
