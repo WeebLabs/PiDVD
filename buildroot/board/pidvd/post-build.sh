@@ -15,3 +15,9 @@ install -m 0644 "${BOARD_DIR}/cmdline.txt" "${BINARIES_DIR}/rpi-firmware/cmdline
 
 # Mount point for USB disc drives, and for the boot partition (deploys)
 mkdir -p "${TARGET_DIR}/media/usb" "${TARGET_DIR}/boot"
+
+# No syslog/klog/cron on an appliance; the player logs to console
+rm -f "${TARGET_DIR}/etc/init.d/S01syslogd" \
+      "${TARGET_DIR}/etc/init.d/S02klogd" \
+      "${TARGET_DIR}/etc/init.d/S50crond" \
+      "${TARGET_DIR}/etc/init.d/S02sysctl"

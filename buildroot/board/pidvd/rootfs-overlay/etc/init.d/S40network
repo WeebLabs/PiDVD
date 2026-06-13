@@ -1,0 +1,13 @@
+#!/bin/sh
+# PiDVD: network must never delay the player. udhcpc backgrounds
+# immediately (-b) and keeps retrying on its own.
+case "$1" in
+  start)
+    ip link set lo up
+    ip link set eth0 up 2>/dev/null
+    udhcpc -b -i eth0 -t 3 -A 5 -p /run/udhcpc.eth0.pid >/dev/null 2>&1
+    ;;
+  stop)
+    [ -f /run/udhcpc.eth0.pid ] && kill "$(cat /run/udhcpc.eth0.pid)"
+    ;;
+esac

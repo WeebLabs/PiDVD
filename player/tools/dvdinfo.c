@@ -19,6 +19,16 @@ int main(int argc, char **argv)
     pidvd_standard_t std = pidvd_disc_standard(d, &mixed);
 
     printf("Volume        : %s\n", pidvd_disc_volume_id(d));
+    printf("Regions       : ");
+    uint8_t rm = pidvd_disc_region_mask(d);
+    if (rm == 0xff) {
+        printf("all\n");
+    } else {
+        for (int r = 0; r < 8; r++)
+            if (rm & (1 << r))
+                printf("%d ", r + 1);
+        printf("\n");
+    }
     printf("Titles        : %d\n", pidvd_disc_title_count(d));
     printf("Output mode   : %s%s\n", pidvd_standard_name(std),
            mixed ? "  (MIXED-STANDARD DISC)" : "");

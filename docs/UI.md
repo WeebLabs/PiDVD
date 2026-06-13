@@ -132,7 +132,11 @@ USB hot-plug is the disc tray. The instant a drive mounts, a one-second
 "tray" beat plays — the spinner runs `◌ ◍ ◉` while the catalog scan kicks
 off — then cut to BROWSE.
 
-### 5.2 BROWSE — the main screen
+### 5.2 BROWSE — the main screen (CONSOLE layout)
+
+BROWSE has three **layouts** (§5.5) — like themes, a config swap with no
+behavioral difference. CONSOLE is the reference layout; the others reuse
+every rule defined here.
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
@@ -214,13 +218,98 @@ Resume points are persisted per-disc in `.pidvd/resume` at the drive root
 (keyed by relpath+size, plain text). Read-only media: RAM only, lost at
 power-off — acceptable.
 
+### 5.5 Alternate BROWSE layouts
+
+**MARQUEE** — the couch layout. A vertical carousel: the selected disc in
+`TITLE` size dead-center with `▸ ◂` flanks, neighbors above/below in
+`LIST` size fading `TEXT`→`DIM` with distance (two each side). One
+`SMALL` info line below — the essentials only. Directories render as
+`▸ BOX SETS · 12`. UP/DOWN slides the stack (2-line steps, eased);
+selection wraps. Gorgeous at 3 m, best under ~50 discs per folder.
+
+```
+              ◉ PiDVD · USB · /Action · 39 DISCS
+
+                         Goldeneye
+                           Heat
+
+                  ▸  D I E   H A R D  ◂
+
+                           Léon
+                          Ronin
+
+      PAL · 576i · 16:9 · 2:08 · AC-3 5.1 · REGION 2 · ⟳
+
+          II DIE HARD 2 · 01:12:33  ▮▮▮▮▮▯▯▯▯▯
+            ▴▾ SELECT   ⏎ PLAY   ◂ BACK
+```
+
+(`⟳` marks a resume point; the `II` line is the NOW PLAYING shelf,
+present only while something is suspended.)
+
+**LEDGER** — the archivist layout. Full-width `SMALL`-font table, 17 rows
+on PAL: name plus STD / ASPECT / LENGTH / SIZE columns, header row in
+`DIM`. The selected disc's remaining card data (region, titles, audio,
+subs) condenses into a single detail strip above the footer. Built for
+hundred-disc collections; pairs with the catalog cache doing its job.
+
+```
+ ◉ PiDVD   USB · /Action                                  39 DISCS
+ NAME                               STD    ASPECT   LENGTH    SIZE
+ ▸ Box Sets                          ·       ·     12 ITEMS  18.2 GB
+▌◉ Die Hard                         PAL    16:9      2:08     7.6 GB▐
+ ◉ Die Hard 2                       PAL    16:9      1:58     6.8 GB
+ ◉ Goldeneye                        PAL    16:9      2:10     7.1 GB
+   ⋮
+ DIE HARD · REGION 2 · 4 TITLES · AC-3 5.1 EN DE · SUBS EN DE FR NL
+ ▴▾ SELECT   ⏎ PLAY   ◂ BACK   « » PAGE   ■ EJECT
+```
+
+Layout choice lives in SETTINGS, applies live, and is persisted. ATTRACT
+and SETTINGS are layout-independent.
+
+### 5.6 SETTINGS
+
+Entered with `MENU` from the BROWSE root (where `MENU`/`LEFT` would
+otherwise be a no-op — the footer hints `◂ SETTINGS` only at root) or
+from ATTRACT. Same chrome as BROWSE; one centered panel:
+
+```
+   ⚙ SETTINGS
+
+   THEME             ◂ AMBER & ICE ▸
+   LAYOUT            ◂ CONSOLE ▸
+   PICKER MODE       ◂ AUTO · LAST DISC ▸
+   AUDIO OUTPUT      ◂ STEREO DOWNMIX ▸
+   ATTRACT DIM       ◂ AFTER 15 MIN ▸
+   RESCAN CATALOG    ⏎
+
+   PIDVD 0.4 · 2025.02 · CRT NEVER LIES
+
+   ▴▾ SELECT   ◂▸ CHANGE   ■ EXIT
+```
+
+- Labels `DIM`, values `BRIGHT`, selected row gets the bar treatment on
+  the value only. LEFT/RIGHT cycle a value and it applies **instantly** —
+  flipping themes/layouts live on the CRT is half the fun. ENTER fires
+  action rows (rescan). MENU or STOP exits.
+- Values: THEME (§2 four), LAYOUT (CONSOLE/MARQUEE/LEDGER), PICKER MODE
+  (AUTO · LAST DISC / PAL / NTSC — the picker's own video mode), AUDIO
+  OUTPUT (STEREO DOWNMIX / AC-3 PASSTHROUGH), ATTRACT DIM (OFF / 5 / 15 /
+  30 MIN — blanks to the drifting logo bug, CRT burn-in kindness).
+- **Persistence**: `pidvd.cfg` (`key=value`) on the SD boot partition —
+  the appliance's NVRAM, independent of whatever drive is inserted.
+  Write path: remount rw → write → sync → remount ro; failure degrades
+  to RAM for the session. The same file carries `last_standard` and the
+  last-played disc for the shelf.
+
 ## 6. Input map (BROWSE context)
 
 | `pidvd_key_t` | Action |
 |---|---|
 | `UP` / `DOWN` | move selection (held = repeat) |
 | `RIGHT` / `ENTER` | open directory / play disc / resume shelf |
-| `LEFT` / `MENU` | parent directory (at root: no-op) |
+| `LEFT` / `MENU` | parent directory (at root: SETTINGS, §5.6) |
 | `PREV/NEXT_CHAPTER` | page up / page down |
 | `TITLE` | jump to NOW PLAYING shelf; press again: back to prior position |
 | `PLAY_PAUSE` | same as ENTER on a disc |
@@ -269,8 +358,9 @@ src/ui/font8.c        the 8×8 font + glyphs (generated C array)
 src/ui/draw.c|h       fb primitives: rect, hline2, text at 1×/2×/4×,
                       marquee clip — all interlace-rule-enforcing
 src/ui/catalog.c|h    enumerate, scan thread, sidecar cache, resume store
-src/ui/picker.c|h     state machine (ATTRACT/BROWSE/LAUNCH), layout,
-                      animation tick, input handling
+src/ui/settings.c|h   settings model + pidvd.cfg persistence (boot part.)
+src/ui/picker.c|h     state machine (ATTRACT/BROWSE/SETTINGS/LAUNCH),
+                      the three layouts, animation tick, input handling
 ```
 
 - Owns `pidvd_video` while active: immediate-mode full redraw into

@@ -55,6 +55,9 @@ pidvd_disc_t *pidvd_disc_open(const char *path);
 void pidvd_disc_close(pidvd_disc_t *d);
 
 const char *pidvd_disc_volume_id(const pidvd_disc_t *d);
+/* Allowed-region bitmask from the VMG category word: bit 0 = region 1 …
+ * bit 7 = region 8. 0xff = all regions (region-free). */
+uint8_t pidvd_disc_region_mask(const pidvd_disc_t *d);
 int pidvd_disc_title_count(const pidvd_disc_t *d);
 const pidvd_title_t *pidvd_disc_title(const pidvd_disc_t *d, int idx);
 

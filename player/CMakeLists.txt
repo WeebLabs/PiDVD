@@ -19,6 +19,19 @@ target_link_libraries(pidvd_core PUBLIC PkgConfig::DVDREAD)
 add_executable(dvdinfo tools/dvdinfo.c)
 target_link_libraries(dvdinfo pidvd_core)
 
+# Picker UI, pure rendering half — host-buildable so screens can be
+# verified as PPMs (tools/uipreview.c) before touching the Pi.
+add_library(pidvd_ui_render STATIC
+    src/ui/font8.c
+    src/ui/draw.c
+    src/ui/render.c
+    src/ui/settings.c
+)
+target_include_directories(pidvd_ui_render PUBLIC src)
+
+add_executable(uipreview tools/uipreview.c)
+target_link_libraries(uipreview pidvd_ui_render)
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # The player proper: KMS/DRM output (VEC), demux, libmpeg2 decode.
     # Linux-only — the host (macOS) build provides dvdinfo for core work.
@@ -29,6 +42,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 
     add_executable(pidvd-player
         src/player/main.c
+        src/ui/catalog.c
+        src/ui/picker.c
         src/nav/engine.c
         src/demux/ps.c
         src/decode/video_mpeg2.c
@@ -41,8 +56,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     )
     target_include_directories(pidvd-player PRIVATE platform)
     target_link_libraries(pidvd-player
-        pidvd_core PkgConfig::DRM PkgConfig::MPEG2 PkgConfig::DVDNAV
-        PkgConfig::ALSA a52 m pthread)
+        pidvd_core pidvd_ui_render PkgConfig::DRM PkgConfig::MPEG2
+        PkgConfig::DVDNAV PkgConfig::ALSA a52 m pthread)
 
     install(TARGETS pidvd-player dvdinfo RUNTIME DESTINATION bin)
 else()

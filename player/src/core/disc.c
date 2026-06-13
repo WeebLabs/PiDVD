@@ -11,6 +11,7 @@
 struct pidvd_disc {
     dvd_reader_t *dvd;
     char volume_id[33];
+    uint8_t region_mask;
     int n_titles;
     pidvd_title_t *titles;
 };
@@ -89,6 +90,11 @@ pidvd_disc_t *pidvd_disc_open(const char *path)
     if (DVDUDFVolumeInfo(dvd, d->volume_id, sizeof(d->volume_id), NULL, 0) != 0
         && DVDISOVolumeInfo(dvd, d->volume_id, sizeof(d->volume_id), NULL, 0) != 0)
         strcpy(d->volume_id, "(unknown)");
+
+    /* vmg_category bits 16-23 are the region *prohibition* mask
+     * (set bit = playback prohibited in that region); invert to the
+     * friendlier allowed-mask. */
+    d->region_mask = (uint8_t)~(vmg->vmgi_mat->vmg_category >> 16);
 
     tt_srpt_t *tt = vmg->tt_srpt;
     d->n_titles = tt->nr_of_srpts;
@@ -174,6 +180,7 @@ void pidvd_disc_close(pidvd_disc_t *d)
 }
 
 const char *pidvd_disc_volume_id(const pidvd_disc_t *d) { return d->volume_id; }
+uint8_t pidvd_disc_region_mask(const pidvd_disc_t *d) { return d->region_mask; }
 void *pidvd_disc_reader(const pidvd_disc_t *d) { return d->dvd; }
 int pidvd_disc_title_count(const pidvd_disc_t *d) { return d->n_titles; }
 

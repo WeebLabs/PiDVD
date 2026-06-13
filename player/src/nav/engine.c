@@ -153,6 +153,15 @@ static void on_frame(void *opaque, const uint8_t *y, const uint8_t *u,
     e->tff = tff;
     e->rff = rff;
     e->have_frame = true;
+    if (e->frames == 0) {
+        FILE *up = fopen("/proc/uptime", "r");
+        if (up) {
+            double t = 0;
+            if (fscanf(up, "%lf", &t) == 1)
+                fprintf(stderr, "pidvd: first frame at %.1fs\n", t);
+            fclose(up);
+        }
+    }
     push_composed(e);
 }
 

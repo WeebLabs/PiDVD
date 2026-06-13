@@ -7,6 +7,10 @@ enable_uart=1
 disable_overscan=1
 disable_splash=1
 boot_delay=0
+# full ARM clock during boot (otherwise 600MHz until the governor wakes)
+initial_turbo=30
+# skip HAT EEPROM probe at power-on
+force_eeprom_read=0
 
 # Full KMS — the vc4 driver owns the VEC/DPI/pixel valves.
 # composite=1 is required: the overlay disables the VEC by default

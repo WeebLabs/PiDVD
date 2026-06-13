@@ -47,6 +47,6 @@ if [ "$MODE" = "--kernel" ]; then
     echo ">> rebooting with new kernel"
 else
     echo ">> restarting playback"
-    $SSH "/etc/init.d/S90pidvd stop; /etc/init.d/S90pidvd start" || true
+    $SSH "/etc/init.d/S30pidvd stop; /etc/init.d/S30pidvd start" || true
 fi
 echo ">> done"
