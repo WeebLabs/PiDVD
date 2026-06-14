@@ -73,6 +73,8 @@ int ui_settings_cycle(ui_settings_t *s, int row, int dir)
 void ui_settings_load(ui_settings_t *s)
 {
     memset(s, 0, sizeof(*s));
+    s->theme = 1;          /* PHOSPHOR (index into theme_v) */
+    s->layout = 0;         /* CONSOLE (index into layout_v) */
     s->attract_dim = 2;    /* 15 min — CRT kindness by default */
     s->last_standard = 1;  /* last-disc standard for the resume shelf */
 

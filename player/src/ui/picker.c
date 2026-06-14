@@ -55,16 +55,16 @@ static void drive_eject(void)
 
 /* ---- the loop ---------------------------------------------------------- */
 
-/* The menu renders in 576i PAL — interlaced, matching the boot console
- * and the composite path. Progressive (240p/288p) was the goal for a
- * flicker-free menu, but it doesn't survive composite output on this
- * CRT: a progressive scan breaks the PAL chroma-phase sequence (color
- * drops out) and the set won't vertically lock it (rolls). The UI is
- * interlace-safe (row-doubled glyphs, >=2-line strokes), so 576i is
- * rock-steady anyway. Revisit progressive on the RGB/VGA666 path
- * (milestone 3), where it sidesteps the composite chroma issue. */
-#define MENU_STD  PIDVD_STD_PAL
-#define MENU_ROWS_H 576   /* logical render height (PAL layout) */
+/* The menu is 240p NTSC — progressive, the steady retro look. Earlier
+ * "240p rolls over composite" turned out to be the VEC mis-programming
+ * bug (legacy/partial modeset left the encoder half-set); with the atomic
+ * off->on modeset in video_kms the VEC is fully re-initialised and 240p is
+ * clean. Selecting a disc switches to its native 576i/480i (atomic off->on
+ * again), with playback staying field-accurate via the unchanged
+ * interlaced flip path; STOP returns here and re-enters 240p NTSC. The
+ * menu canvas renders at 720x480 and is decimated 2:1 to 720x240. */
+#define MENU_STD  PIDVD_STD_NTSC
+#define MENU_ROWS_H 480   /* logical render height; decimated 2:1 to 240p */
 
 typedef struct {
     pidvd_video_t *video;
@@ -84,7 +84,7 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
                       char *iso_out, size_t cap)
 {
     vout_t vo;
-    vo.video = pidvd_video_open_mode(MENU_STD, PIDVD_SCAN_INTERLACED);
+    vo.video = pidvd_video_open_mode(MENU_STD, PIDVD_SCAN_PROGRESSIVE);
     if (!vo.video)
         return -1;
     pidvd_input_t *in = pidvd_input_open();
