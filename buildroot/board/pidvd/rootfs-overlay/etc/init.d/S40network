@@ -1,11 +1,27 @@
 #!/bin/sh
-# PiDVD: network must never delay the player. udhcpc backgrounds
-# immediately (-b) and keeps retrying on its own.
+# PiDVD networking. eth0 is the Pi 3B+'s USB-attached lan78xx NIC, which
+# enumerates a few seconds INTO boot — after this script runs. Configuring
+# it before it exists fails instantly and never recovers: udhcpc -b only
+# backgrounds/retries once it can bind to the interface, so binding to a
+# missing eth0 just exits (no DHCP, no pidfile). That race left the board
+# off the network intermittently. Fix: wait for eth0 to appear, then bring
+# it up and start udhcpc. Done in the background so rcS and the player are
+# never delayed.
 case "$1" in
   start)
     ip link set lo up
-    ip link set eth0 up 2>/dev/null
-    udhcpc -b -i eth0 -t 3 -A 5 -p /run/udhcpc.eth0.pid >/dev/null 2>&1
+    (
+      n=0
+      while [ ! -e /sys/class/net/eth0 ] && [ "$n" -lt 30 ]; do
+        sleep 1
+        n=$((n + 1))
+      done
+      [ -e /sys/class/net/eth0 ] || exit 0
+      ip link set eth0 up
+      # -b keeps retrying in the background until the PHY links and a lease
+      # arrives (link autoneg can take several seconds after bring-up).
+      udhcpc -b -i eth0 -t 6 -A 5 -p /run/udhcpc.eth0.pid >/dev/null 2>&1
+    ) &
     ;;
   stop)
     [ -f /run/udhcpc.eth0.pid ] && kill "$(cat /run/udhcpc.eth0.pid)"
