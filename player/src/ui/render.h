@@ -15,7 +15,8 @@ typedef struct {
     uint32_t bg, panel, dim, text, bright, hot, bar, bartxt;
 } ui_theme_t;
 
-extern const ui_theme_t pidvd_themes[4];
+#define PIDVD_N_THEMES 5
+extern const ui_theme_t pidvd_themes[PIDVD_N_THEMES];
 
 /* One browsable thing: a directory or a DVD ISO (+ metadata once the
  * catalog scan has reached it). */

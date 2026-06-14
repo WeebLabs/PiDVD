@@ -8,8 +8,9 @@
 
 #include "ui/font8.h"
 
-/* docs/UI.md §2 — AMBER & ICE, PHOSPHOR, VFD, MIDNIGHT */
-const ui_theme_t pidvd_themes[4] = {
+/* docs/UI.md §2 — AMBER & ICE, PHOSPHOR, VFD, MIDNIGHT, TERMINAL.
+ * Columns: bg panel dim text bright hot bar bartxt */
+const ui_theme_t pidvd_themes[PIDVD_N_THEMES] = {
     { 0x0D0A06, 0x161310, 0x4E6A86, 0xD98E00, 0xF4EFE2, 0x8FC6FF,
       0xFFA000, 0x1A0E00 },
     { 0x0E0700, 0x1C1000, 0x6E4400, 0xD98E00, 0xFFB000, 0xFFDE9C,
@@ -18,6 +19,10 @@ const ui_theme_t pidvd_themes[4] = {
       0x49E0C2, 0x03201A },
     { 0x070B14, 0x0D1426, 0x32436B, 0x8FB0E8, 0xEEF2FA, 0xFFB000,
       0x5B86DC, 0x060D1E },
+    /* TERMINAL — Phosphor amber on a pure-black void, for the wireframe
+     * vintage-terminal look (only the bg differs from PHOSPHOR). */
+    { 0x000000, 0x1C1000, 0x6E4400, 0xD98E00, 0xFFB000, 0xFFDE9C,
+      0xFFA000, 0x140A00 },
 };
 
 /* UTF-8 literals for the glyph set */
@@ -445,6 +450,8 @@ static void render_wireframe(ui_canvas_t *c, const ui_view_t *v,
                              const ui_theme_t *th)
 {
     geo_t g = geo(c);
+    /* Background comes from the theme (the TERMINAL theme is a pure-black
+     * void for the classic line-art-on-black terminal look). */
     wf_box(c, g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0, th->dim);
 
     int yb = header(c, v, th, &g);   /* logo/path/count + full-width rule */
@@ -763,7 +770,10 @@ int pidvd_ui_visible_rows(const ui_view_t *v, int canvas_h)
 
 void pidvd_ui_render(ui_canvas_t *c, const ui_view_t *v)
 {
-    const ui_theme_t *th = &pidvd_themes[v->set->theme & 3];
+    int ti = v->set->theme;
+    if (ti < 0 || ti >= PIDVD_N_THEMES)
+        ti = 0;
+    const ui_theme_t *th = &pidvd_themes[ti];
     ui_fill(c, 0, 0, c->w, c->h, th->bg);
 
     switch (v->screen) {

@@ -135,9 +135,13 @@ int main(int argc, char **argv)
     pidvd_ui_render(&c, &v);
     snprintf(path, sizeof(path), "%s/wireframe-amber-ice.ppm", out);
     write_ppm(path, px);
-    set.theme = 1;  /* also phosphor, the current default theme */
+    set.theme = 1;  /* phosphor */
     pidvd_ui_render(&c, &v);
     snprintf(path, sizeof(path), "%s/wireframe-phosphor.ppm", out);
+    write_ppm(path, px);
+    set.theme = 4;  /* terminal — black void, the default pairing */
+    pidvd_ui_render(&c, &v);
+    snprintf(path, sizeof(path), "%s/wireframe-terminal.ppm", out);
     write_ppm(path, px);
     set.theme = 0;
 
