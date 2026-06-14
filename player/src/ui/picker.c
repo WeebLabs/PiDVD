@@ -55,13 +55,16 @@ static void drive_eject(void)
 
 /* ---- the loop ---------------------------------------------------------- */
 
-/* The menu is ALWAYS 240p NTSC — one fixed, flicker-free progressive
- * mode, never modeset while browsing. Playback (the nav engine) opens
- * the disc's native 480i/576i; returning here re-opens 240p NTSC. The
- * menu canvas is rendered at 720x480 and decimated 2:1 to 720x240 by
- * the video backend, so the layout is the NTSC variant. */
-#define MENU_STD  PIDVD_STD_NTSC
-#define MENU_ROWS_H 480   /* logical render height (NTSC layout) */
+/* The menu renders in 576i PAL — interlaced, matching the boot console
+ * and the composite path. Progressive (240p/288p) was the goal for a
+ * flicker-free menu, but it doesn't survive composite output on this
+ * CRT: a progressive scan breaks the PAL chroma-phase sequence (color
+ * drops out) and the set won't vertically lock it (rolls). The UI is
+ * interlace-safe (row-doubled glyphs, >=2-line strokes), so 576i is
+ * rock-steady anyway. Revisit progressive on the RGB/VGA666 path
+ * (milestone 3), where it sidesteps the composite chroma issue. */
+#define MENU_STD  PIDVD_STD_PAL
+#define MENU_ROWS_H 576   /* logical render height (PAL layout) */
 
 typedef struct {
     pidvd_video_t *video;
@@ -81,7 +84,7 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
                       char *iso_out, size_t cap)
 {
     vout_t vo;
-    vo.video = pidvd_video_open_mode(MENU_STD, PIDVD_SCAN_PROGRESSIVE);
+    vo.video = pidvd_video_open_mode(MENU_STD, PIDVD_SCAN_INTERLACED);
     if (!vo.video)
         return -1;
     pidvd_input_t *in = pidvd_input_open();

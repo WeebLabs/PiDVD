@@ -30,6 +30,7 @@ struct pidvd_video {
     uint32_t conn_id;
     uint32_t crtc_id;
     int crtc_index;
+    uint32_t plane_id;       /* CRTC primary plane (same one legacy flips use) */
     unsigned field_parity;   /* vblank-sequence parity flips latch on */
     bool progressive;        /* 240p/288p menu mode (decimated scanout) */
     pidvd_standard_t std;    /* drives the VEC composite norm (NTSC/PAL) */
@@ -181,59 +182,143 @@ static void free_buffers(pidvd_video_t *v)
     v->scratch_h = 0;
 }
 
-/* Program the VEC composite norm to match the standard being displayed.
- * The boot cmdline only supplies a default norm; playback can switch
- * NTSC<->PAL. If the norm and mode disagree, the VEC emits malformed
- * composite timing/color and the CRT can't lock. The norm lives in the
- * connector's "TV mode" enum property (newer kernels) or legacy "mode";
- * set it per modeset. */
-static bool set_tv_norm(pidvd_video_t *v, pidvd_standard_t std)
+/* ---- atomic modeset --------------------------------------------------
+ * The composite mode AND the VEC norm must be set together in an atomic
+ * commit: a legacy drmModeSetCrtc (or a bare setprop) does NOT fully
+ * program the VEC encoder, and switching modes that way leaves it
+ * distorted with no chroma. Crucially the switch must be a full OFF then
+ * ON cycle — that is what makes vc4's encoder atomic_enable re-run the
+ * complete VEC init (config + colour subcarrier). Per-frame flips stay on
+ * the legacy page-flip path (pidvd_video_present), which keeps the
+ * field-parity interlace logic intact. */
+
+static uint32_t prop_id(int fd, uint32_t obj, uint32_t type, const char *name)
 {
-    const char *want = (std == PIDVD_STD_PAL) ? "PAL" : "NTSC";
-    bool found = false;
-    bool ok = false;
-    drmModeObjectProperties *props = drmModeObjectGetProperties(
-        v->fd, v->conn_id, DRM_MODE_OBJECT_CONNECTOR);
-    if (!props)
-        return false;
-    for (uint32_t i = 0; i < props->count_props; i++) {
-        drmModePropertyRes *p = drmModeGetProperty(v->fd, props->props[i]);
-        if (!p)
-            continue;
-        if ((p->flags & DRM_MODE_PROP_ENUM)
-            && (!strcmp(p->name, "TV mode") || !strcmp(p->name, "mode"))) {
-            found = true;
-            for (int e = 0; e < p->count_enums; e++) {
-                if (!strcmp(p->enums[e].name, want)) {
-                    if (drmModeObjectSetProperty(v->fd, v->conn_id,
-                            DRM_MODE_OBJECT_CONNECTOR, p->prop_id,
-                            p->enums[e].value) == 0) {
-                        fprintf(stderr, "video: VEC norm -> %s (%s)\n",
-                                want, p->name);
-                        ok = true;
-                    } else {
-                        fprintf(stderr, "video: VEC norm %s via %s failed: "
-                                "%s\n", want, p->name, strerror(errno));
-                    }
-                    break;
-                }
-            }
+    drmModeObjectProperties *props = drmModeObjectGetProperties(fd, obj, type);
+    uint32_t id = 0;
+    if (props) {
+        for (uint32_t i = 0; i < props->count_props && !id; i++) {
+            drmModePropertyRes *p = drmModeGetProperty(fd, props->props[i]);
+            if (p && !strcmp(p->name, name))
+                id = p->prop_id;
+            if (p)
+                drmModeFreeProperty(p);
         }
-        drmModeFreeProperty(p);
-        if (ok)
-            break;
+        drmModeFreeObjectProperties(props);
     }
-    drmModeFreeObjectProperties(props);
-    if (!found)
-        fprintf(stderr, "video: warning: no VEC TV mode property found\n");
-    else if (!ok)
-        fprintf(stderr, "video: warning: could not set VEC norm to %s\n",
-                want);
+    return id;
+}
+
+/* enum value of a named option on an enum property (e.g. TV mode -> PAL) */
+static bool enum_val(int fd, uint32_t prop, const char *name, uint64_t *out)
+{
+    drmModePropertyRes *p = drmModeGetProperty(fd, prop);
+    bool ok = false;
+    if (p) {
+        for (int e = 0; e < p->count_enums; e++)
+            if (!strcmp(p->enums[e].name, name)) {
+                *out = p->enums[e].value;
+                ok = true;
+                break;
+            }
+        drmModeFreeProperty(p);
+    }
     return ok;
 }
 
+/* the CRTC's primary plane — the same plane legacy page-flips target */
+static bool select_plane(pidvd_video_t *v)
+{
+    drmModePlaneRes *pr = drmModeGetPlaneResources(v->fd);
+    if (!pr)
+        return false;
+    v->plane_id = 0;
+    for (uint32_t i = 0; i < pr->count_planes && !v->plane_id; i++) {
+        drmModePlane *pl = drmModeGetPlane(v->fd, pr->planes[i]);
+        if (pl && (pl->possible_crtcs & (1u << v->crtc_index)))
+            v->plane_id = pl->plane_id;
+        if (pl)
+            drmModeFreePlane(pl);
+    }
+    drmModeFreePlaneResources(pr);
+    return v->plane_id != 0;
+}
+
+/* Full OFF->ON atomic modeset: mode + norm + plane, scanning out buf[0]. */
+static bool commit_mode(pidvd_video_t *v)
+{
+    const char *norm = (v->std == PIDVD_STD_PAL) ? "PAL" : "NTSC";
+    uint32_t cP = prop_id(v->fd, v->conn_id, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID");
+    uint32_t cTV = prop_id(v->fd, v->conn_id, DRM_MODE_OBJECT_CONNECTOR, "TV mode");
+    uint32_t rA = prop_id(v->fd, v->crtc_id, DRM_MODE_OBJECT_CRTC, "ACTIVE");
+    uint32_t rM = prop_id(v->fd, v->crtc_id, DRM_MODE_OBJECT_CRTC, "MODE_ID");
+    uint32_t pF = prop_id(v->fd, v->plane_id, DRM_MODE_OBJECT_PLANE, "FB_ID");
+    uint32_t pC = prop_id(v->fd, v->plane_id, DRM_MODE_OBJECT_PLANE, "CRTC_ID");
+    uint32_t pSX = prop_id(v->fd, v->plane_id, DRM_MODE_OBJECT_PLANE, "SRC_X");
+    uint32_t pSY = prop_id(v->fd, v->plane_id, DRM_MODE_OBJECT_PLANE, "SRC_Y");
+    uint32_t pSW = prop_id(v->fd, v->plane_id, DRM_MODE_OBJECT_PLANE, "SRC_W");
+    uint32_t pSH = prop_id(v->fd, v->plane_id, DRM_MODE_OBJECT_PLANE, "SRC_H");
+    uint32_t pCX = prop_id(v->fd, v->plane_id, DRM_MODE_OBJECT_PLANE, "CRTC_X");
+    uint32_t pCY = prop_id(v->fd, v->plane_id, DRM_MODE_OBJECT_PLANE, "CRTC_Y");
+    uint32_t pCW = prop_id(v->fd, v->plane_id, DRM_MODE_OBJECT_PLANE, "CRTC_W");
+    uint32_t pCH = prop_id(v->fd, v->plane_id, DRM_MODE_OBJECT_PLANE, "CRTC_H");
+    uint64_t norm_val = 0;
+    if (!cP || !cTV || !rA || !rM || !pF || !pC || !pSW || !pSH || !pCW || !pCH
+        || !enum_val(v->fd, cTV, norm, &norm_val)) {
+        fprintf(stderr, "video: atomic props/norm '%s' unavailable\n", norm);
+        return false;
+    }
+
+    /* OFF: tear the pipeline down so the ON commit is a full enable. */
+    drmModeAtomicReq *off = drmModeAtomicAlloc();
+    drmModeAtomicAddProperty(off, v->conn_id, cP, 0);
+    drmModeAtomicAddProperty(off, v->crtc_id, rA, 0);
+    drmModeAtomicAddProperty(off, v->crtc_id, rM, 0);
+    drmModeAtomicAddProperty(off, v->plane_id, pF, 0);
+    drmModeAtomicAddProperty(off, v->plane_id, pC, 0);
+    int rc = drmModeAtomicCommit(v->fd, off, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
+    drmModeAtomicFree(off);
+    if (rc) {
+        fprintf(stderr, "video: atomic OFF failed: %s\n", strerror(errno));
+        return false;
+    }
+    usleep(120000);
+
+    /* ON: program mode + norm + plane in one full enable. */
+    uint32_t blob = 0;
+    if (drmModeCreatePropertyBlob(v->fd, &v->mode, sizeof(v->mode), &blob)) {
+        fprintf(stderr, "video: mode blob failed: %s\n", strerror(errno));
+        return false;
+    }
+    drmModeAtomicReq *on = drmModeAtomicAlloc();
+    drmModeAtomicAddProperty(on, v->conn_id, cP, v->crtc_id);
+    drmModeAtomicAddProperty(on, v->conn_id, cTV, norm_val);
+    drmModeAtomicAddProperty(on, v->crtc_id, rM, blob);
+    drmModeAtomicAddProperty(on, v->crtc_id, rA, 1);
+    drmModeAtomicAddProperty(on, v->plane_id, pF, v->buf[0].fb_id);
+    drmModeAtomicAddProperty(on, v->plane_id, pC, v->crtc_id);
+    drmModeAtomicAddProperty(on, v->plane_id, pSX, 0);
+    drmModeAtomicAddProperty(on, v->plane_id, pSY, 0);
+    drmModeAtomicAddProperty(on, v->plane_id, pSW, (uint64_t)v->mode.hdisplay << 16);
+    drmModeAtomicAddProperty(on, v->plane_id, pSH, (uint64_t)v->mode.vdisplay << 16);
+    drmModeAtomicAddProperty(on, v->plane_id, pCX, 0);
+    drmModeAtomicAddProperty(on, v->plane_id, pCY, 0);
+    drmModeAtomicAddProperty(on, v->plane_id, pCW, v->mode.hdisplay);
+    drmModeAtomicAddProperty(on, v->plane_id, pCH, v->mode.vdisplay);
+    rc = drmModeAtomicCommit(v->fd, on, DRM_MODE_ATOMIC_ALLOW_MODESET, NULL);
+    drmModeAtomicFree(on);
+    drmModeDestroyPropertyBlob(v->fd, blob);
+    if (rc) {
+        fprintf(stderr, "video: atomic ON failed: %s\n", strerror(errno));
+        return false;
+    }
+    fprintf(stderr, "video: VEC %s norm=%s (atomic off->on)\n",
+            v->mode.name, norm);
+    return true;
+}
+
 /* Allocate scanout buffers for the current mode (plus a full-height
- * scratch when progressive) and program the CRTC. */
+ * scratch when progressive) and program the CRTC via an atomic off->on. */
 static bool setup_mode(pidvd_video_t *v)
 {
     for (int i = 0; i < 2; i++)
@@ -248,13 +333,12 @@ static bool setup_mode(pidvd_video_t *v)
         if (!v->scratch)
             return false;
     }
-    /* Match the composite norm to the mode before the modeset latches. */
-    set_tv_norm(v, v->std);
-    if (drmModeSetCrtc(v->fd, v->crtc_id, v->buf[0].fb_id, 0, 0,
-                       &v->conn_id, 1, &v->mode) < 0) {
-        fprintf(stderr, "video: modeset failed: %s\n", strerror(errno));
+    if (!select_plane(v)) {
+        fprintf(stderr, "video: no plane for crtc\n");
         return false;
     }
+    if (!commit_mode(v))
+        return false;
     v->back = 1;
     return true;
 }
@@ -287,6 +371,16 @@ pidvd_video_t *pidvd_video_open_mode(pidvd_standard_t std, pidvd_scan_t scan)
     v->fd = open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
     if (v->fd < 0) {
         fprintf(stderr, "video: cannot open /dev/dri/card0: %s\n",
+                strerror(errno));
+        goto fail;
+    }
+    /* Atomic is required to set the VEC mode+norm together; universal
+     * planes exposes the primary plane the modeset and legacy flips share.
+     * Neither disables the legacy drmModePageFlip/drmWaitVBlank path the
+     * field-parity present loop relies on (vc4 is a full atomic driver). */
+    if (drmSetClientCap(v->fd, DRM_CLIENT_CAP_ATOMIC, 1)
+        || drmSetClientCap(v->fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1)) {
+        fprintf(stderr, "video: atomic/universal-planes cap unavailable: %s\n",
                 strerror(errno));
         goto fail;
     }
