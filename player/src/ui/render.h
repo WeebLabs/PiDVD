@@ -41,7 +41,7 @@ typedef struct {
 } ui_item_t;
 
 typedef enum { UI_ATTRACT, UI_BROWSE, UI_SETTINGS } ui_screen_t;
-typedef enum { UI_CONSOLE, UI_MARQUEE, UI_LEDGER } ui_layout_t;
+typedef enum { UI_CONSOLE, UI_MARQUEE, UI_LEDGER, UI_WIREFRAME } ui_layout_t;
 
 typedef struct {
     ui_screen_t screen;

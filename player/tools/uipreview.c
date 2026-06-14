@@ -131,6 +131,16 @@ int main(int argc, char **argv)
     snprintf(path, sizeof(path), "%s/ledger-amber-ice.ppm", out);
     write_ppm(path, px);
 
+    set.layout = UI_WIREFRAME;
+    pidvd_ui_render(&c, &v);
+    snprintf(path, sizeof(path), "%s/wireframe-amber-ice.ppm", out);
+    write_ppm(path, px);
+    set.theme = 1;  /* also phosphor, the current default theme */
+    pidvd_ui_render(&c, &v);
+    snprintf(path, sizeof(path), "%s/wireframe-phosphor.ppm", out);
+    write_ppm(path, px);
+    set.theme = 0;
+
     set.layout = UI_CONSOLE;
     v.screen = UI_SETTINGS;
     v.set_sel = 0;

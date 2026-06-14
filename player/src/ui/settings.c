@@ -18,7 +18,8 @@ static const char *cfg_path(int *needs_mount)
 
 static const char *const theme_v[]  = { "AMBER & ICE", "PHOSPHOR", "VFD",
                                         "MIDNIGHT" };
-static const char *const layout_v[] = { "CONSOLE", "MARQUEE", "LEDGER" };
+static const char *const layout_v[] = { "CONSOLE", "MARQUEE", "LEDGER",
+                                        "WIREFRAME" };
 static const char *const audio_v[]  = { "STEREO DOWNMIX", "AC-3 PASSTHROUGH" };
 static const char *const dim_v[]    = { "OFF", "AFTER 5 MIN", "AFTER 15 MIN",
                                         "AFTER 30 MIN" };
@@ -29,7 +30,7 @@ static const struct {
     int n;
 } rows[UI_SET_ROWS] = {
     [UI_SET_THEME]  = { "THEME",          theme_v,  4 },
-    [UI_SET_LAYOUT] = { "LAYOUT",         layout_v, 3 },
+    [UI_SET_LAYOUT] = { "LAYOUT",         layout_v, 4 },
     [UI_SET_AUDIO]  = { "AUDIO OUTPUT",   audio_v,  2 },
     [UI_SET_DIM]    = { "ATTRACT DIM",    dim_v,    4 },
     [UI_SET_RESCAN] = { "RESCAN CATALOG", 0,        0 },
@@ -74,7 +75,7 @@ void ui_settings_load(ui_settings_t *s)
 {
     memset(s, 0, sizeof(*s));
     s->theme = 1;          /* PHOSPHOR (index into theme_v) */
-    s->layout = 0;         /* CONSOLE (index into layout_v) */
+    s->layout = 3;         /* WIREFRAME (index into layout_v) */
     s->attract_dim = 2;    /* 15 min — CRT kindness by default */
     s->last_standard = 1;  /* last-disc standard for the resume shelf */
 
@@ -94,7 +95,7 @@ void ui_settings_load(ui_settings_t *s)
             char *v = eq + 1;
             v[strcspn(v, "\r\n")] = 0;
             if (!strcmp(line, "theme"))        s->theme = atoi(v) & 3;
-            else if (!strcmp(line, "layout"))  s->layout = atoi(v) % 3;
+            else if (!strcmp(line, "layout"))  s->layout = atoi(v) % 4;
             else if (!strcmp(line, "audio"))   s->audio_out = atoi(v) & 1;
             else if (!strcmp(line, "dim"))     s->attract_dim = atoi(v) & 3;
             else if (!strcmp(line, "last_std")) s->last_standard = atoi(v) & 1;

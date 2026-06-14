@@ -287,9 +287,10 @@ static const char *item_icon(const ui_item_t *it)
 
 static void info_card(ui_canvas_t *c, const ui_view_t *v,
                       const ui_theme_t *th, const geo_t *g,
-                      int x, int yb, int ye)
+                      int x, int yb, int ye, bool fill)
 {
-    ui_fill(c, x, yb, g->x1 - x, ye - yb, th->panel);
+    if (fill)
+        ui_fill(c, x, yb, g->x1 - x, ye - yb, th->panel);
     if (v->sel < 0 || v->sel >= v->n_items)
         return;
     const ui_item_t *it = v->items[v->sel];
@@ -371,7 +372,7 @@ static void render_console(ui_canvas_t *c, const ui_view_t *v,
     int lx1 = g.x0 + list_w;
 
     ui_vline2(c, lx1 + 4, yb, ye - yb, th->dim);
-    info_card(c, v, th, &g, lx1 + 10, yb, ye);
+    info_card(c, v, th, &g, lx1 + 10, yb, ye, true);
 
     int rows = (ye - yb) / CON_ROW_H;
     for (int r = 0; r < rows; r++) {
@@ -414,6 +415,75 @@ static void render_console(ui_canvas_t *c, const ui_view_t *v,
     }
 
     ui_hline2(c, g.x0, ye + 4, g.x1 - g.x0, th->dim);
+    bool on_dir = v->sel >= 0 && v->sel < v->n_items
+               && v->items[v->sel]->is_dir;
+    hint_t h[5] = {
+        { G_UP G_DOWN, "SELECT" },
+        { G_ENTER, on_dir ? "OPEN" : "PLAY" },
+        { G_LEFT, v->at_root ? "SETTINGS" : "BACK" },
+        { G_PGUP " " G_PGDN, "PAGE" },
+        { G_STOP, "EJECT" },
+    };
+    footer(c, &g, th, h, 5, false);
+}
+
+/* ---- WIREFRAME --------------------------------------------------------
+ * Console structure drawn as line-art: an outer frame + ruled dividers,
+ * NO background fills anywhere; the selected row is marked by an outline
+ * box instead of an inverse bar. A real vintage-terminal look. Colour is
+ * the active theme — lines in DIM, selection + selected text in BRIGHT. */
+
+static void wf_box(ui_canvas_t *c, int x, int y, int w, int h, uint32_t col)
+{
+    ui_hline2(c, x, y, w, col);
+    ui_hline2(c, x, y + h - 2, w, col);
+    ui_vline2(c, x, y, h, col);
+    ui_vline2(c, x + w - 2, y, h, col);
+}
+
+static void render_wireframe(ui_canvas_t *c, const ui_view_t *v,
+                             const ui_theme_t *th)
+{
+    geo_t g = geo(c);
+    wf_box(c, g.x0, g.y0, g.x1 - g.x0, g.y1 - g.y0, th->dim);
+
+    int yb = header(c, v, th, &g);   /* logo/path/count + full-width rule */
+    yb = shelf(c, v, th, &g, yb);    /* NOW PLAYING strip + rule, if any  */
+    int ye = g.y1 - 28;
+    int list_w = 384;
+    int vx = g.x0 + list_w;
+
+    ui_vline2(c, vx, yb, ye - yb, th->dim);           /* list | info       */
+    ui_hline2(c, g.x0, ye, g.x1 - g.x0, th->dim);     /* footer divider    */
+    info_card(c, v, th, &g, vx + 12, yb, ye, false);  /* no panel fill     */
+
+    int rows = (ye - yb) / CON_ROW_H;
+    for (int r = 0; r < rows; r++) {
+        int idx = v->scroll + r;
+        if (idx >= v->n_items)
+            break;
+        const ui_item_t *it = v->items[idx];
+        int y = yb + r * CON_ROW_H + 1;
+        bool sel = (idx == v->sel);
+        uint32_t fg = sel ? th->bright : th->text;
+        uint32_t fg2 = sel ? th->bright : th->dim;
+        if (sel)   /* outline the row instead of filling it */
+            wf_box(c, g.x0 + 6, y - 1, list_w - 16, CON_ROW_H, th->bright);
+
+        ui_text(c, g.x0 + 14, y + 2, S_LS_X, S_LS_Y, fg, item_icon(it));
+        char right[24] = "";
+        if (it->is_dir && !it->is_parent)
+            snprintf(right, sizeof(right), "%d", it->n_items);
+        else if (!it->is_dir && it->scanned && !it->scan_failed)
+            fmt_dur_short(it->longest, right, sizeof(right));
+        else if (!it->is_dir && !it->scanned)
+            snprintf(right, sizeof(right), "%s", spinner(v->tick + idx));
+        int rw = ui_text_w(right, S_SM_X);
+        ui_text(c, g.x0 + list_w - 16 - rw, y + 3, S_SM_X, S_SM_Y, fg2, right);
+        ui_text_clip(c, g.x0 + 42, y + 2, S_LS_X, S_LS_Y, fg, it->name,
+                     g.x0 + list_w - 22 - rw);
+    }
+
     bool on_dir = v->sel >= 0 && v->sel < v->n_items
                && v->items[v->sel]->is_dir;
     hint_t h[5] = {
@@ -705,10 +775,11 @@ void pidvd_ui_render(ui_canvas_t *c, const ui_view_t *v)
         break;
     case UI_BROWSE:
         switch ((ui_layout_t)v->set->layout) {
-        case UI_MARQUEE: render_marquee(c, v, th); break;
-        case UI_LEDGER:  render_ledger(c, v, th);  break;
+        case UI_MARQUEE:   render_marquee(c, v, th);   break;
+        case UI_LEDGER:    render_ledger(c, v, th);    break;
+        case UI_WIREFRAME: render_wireframe(c, v, th); break;
         case UI_CONSOLE:
-        default:         render_console(c, v, th); break;
+        default:           render_console(c, v, th);   break;
         }
         break;
     }
