@@ -66,19 +66,19 @@ things. Four themes (XRGB8888):
 
 | Role     | **AMBER & ICE** (default) | **PHOSPHOR** (mono) | **VFD** | **MIDNIGHT** |
 |----------|-----------|-----------|-----------|-----------|
-| `BG`     | `#0D0A06` | `#0E0700` | `#03100D` | `#070B14` |
-| `PANEL`  | `#161310` | `#1C1000` | `#07201B` | `#0D1426` |
-| `DIM`    | `#4E6A86` | `#6E4400` | `#1F5A50` | `#32436B` |
-| `TEXT`   | `#D98E00` | `#D98E00` | `#63D6BE` | `#8FB0E8` |
-| `BRIGHT` | `#F4EFE2` | `#FFB000` | `#D9FFF4` | `#EEF2FA` |
-| `HOT`    | `#8FC6FF` | `#FFDE9C` | `#FFB000` | `#FFB000` |
-| `BAR`    | `#FFA000` | `#FFA000` | `#49E0C2` | `#5B86DC` |
-| `BARTXT` | `#1A0E00` | `#140A00` | `#03201A` | `#060D1E` |
+| `BG`     | `#0D0A06` | `#0E0600` | `#03100D` | `#070B14` |
+| `PANEL`  | `#161310` | `#1C0E00` | `#07201B` | `#0D1426` |
+| `DIM`    | `#4E6A86` | `#6E3C00` | `#1F5A50` | `#32436B` |
+| `TEXT`   | `#D98E00` | `#D97C00` | `#63D6BE` | `#8FB0E8` |
+| `BRIGHT` | `#F4EFE2` | `#FF9A00` | `#D9FFF4` | `#EEF2FA` |
+| `HOT`    | `#8FC6FF` | `#FFC29C` | `#FFB000` | `#FFB000` |
+| `BAR`    | `#FFA000` | `#FF8C00` | `#49E0C2` | `#5B86DC` |
+| `BARTXT` | `#1A0E00` | `#140900` | `#03201A` | `#060D1E` |
 
 - **AMBER & ICE** — amber body text, warm-white values and peaks, steel-blue
   chrome and labels (amber's complement), ice-blue accents. Warm where it
   matters, cool where it recedes.
-- **PHOSPHOR** — the pure P3 monochrome terminal. One phosphor, six
+- **PHOSPHOR** — the pure-mono phosphor terminal, nudged slightly red of P3 amber. One phosphor, six
   intensities.
 - **VFD** — vacuum-fluorescent hi-fi front panel: icy cyan body, white
   peaks, amber reserved for the accent pops (resume, glint) like an LED on

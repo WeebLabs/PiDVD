@@ -13,16 +13,18 @@
 const ui_theme_t pidvd_themes[PIDVD_N_THEMES] = {
     { 0x0D0A06, 0x161310, 0x4E6A86, 0xD98E00, 0xF4EFE2, 0x8FC6FF,
       0xFFA000, 0x1A0E00 },
-    { 0x0E0700, 0x1C1000, 0x6E4400, 0xD98E00, 0xFFB000, 0xFFDE9C,
-      0xFFA000, 0x140A00 },
+    /* PHOSPHOR — pure-mono amber phosphor, nudged slightly redder
+     * (green ~-12% vs the amber themes; R/B unchanged). */
+    { 0x0E0600, 0x1C0E00, 0x6E3C00, 0xD97C00, 0xFF9A00, 0xFFC29C,
+      0xFF8C00, 0x140900 },
     { 0x03100D, 0x07201B, 0x1F5A50, 0x63D6BE, 0xD9FFF4, 0xFFB000,
       0x49E0C2, 0x03201A },
     { 0x070B14, 0x0D1426, 0x32436B, 0x8FB0E8, 0xEEF2FA, 0xFFB000,
       0x5B86DC, 0x060D1E },
-    /* TERMINAL — Phosphor amber on a pure-black void, for the wireframe
-     * vintage-terminal look (only the bg differs from PHOSPHOR). */
-    { 0x000000, 0x1C1000, 0x6E4400, 0xD98E00, 0xFFB000, 0xFFDE9C,
-      0xFFA000, 0x140A00 },
+    /* TERMINAL — the redder PHOSPHOR phosphor on a pure-black void, for the
+     * wireframe vintage-terminal look (only the bg differs from PHOSPHOR). */
+    { 0x000000, 0x1C0E00, 0x6E3C00, 0xD97C00, 0xFF9A00, 0xFFC29C,
+      0xFF8C00, 0x140900 },
 };
 
 /* UTF-8 literals for the glyph set */
