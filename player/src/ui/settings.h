@@ -7,13 +7,14 @@
 #define PIDVD_UI_SETTINGS_H
 
 enum { UI_SET_THEME, UI_SET_LAYOUT, UI_SET_AUDIO,
-       UI_SET_DIM, UI_SET_RESCAN, UI_SET_ROWS };
+       UI_SET_DIM, UI_SET_FILTER, UI_SET_RESCAN, UI_SET_ROWS };
 
 typedef struct {
     int theme;        /* index into pidvd_themes */
     int layout;       /* 0 console, 1 marquee, 2 ledger */
     int audio_out;    /* 0 stereo downmix, 1 AC-3 passthrough */
     int attract_dim;  /* 0 off, 1 5min, 2 15min, 3 30min */
+    int comp_filter;  /* 0 off..8: menu composite horizontal low-pass strength */
     /* The menu is always 240p NTSC; the disc's own standard drives
      * playback. last_* are kept for the NOW PLAYING resume shelf. */
     char last_disc[512];

@@ -33,6 +33,7 @@ struct pidvd_video {
     uint32_t plane_id;       /* CRTC primary plane (same one legacy flips use) */
     unsigned field_parity;   /* vblank-sequence parity flips latch on */
     unsigned anchor_par;     /* vblank-count parity sampled at the last modeset */
+    unsigned hfilter;        /* menu composite horizontal low-pass: 0=off..3 */
     bool progressive;        /* 240p/288p menu mode (decimated scanout) */
     pidvd_standard_t std;    /* drives the VEC composite norm (NTSC/PAL) */
     drmModeModeInfo mode;
@@ -433,6 +434,9 @@ pidvd_video_t *pidvd_video_open_mode(pidvd_standard_t std, pidvd_scan_t scan)
     /* Derive field_parity per-modeset from the sampled anchor parity and the
      * process-global calibration bit (PIDVD_FIELD_PARITY seeds it). */
     calibrate_field_parity(v);
+    /* v->hfilter (menu composite low-pass) stays 0 until the picker pushes the
+     * persisted SETTINGS value via pidvd_video_set_hfilter; only the
+     * progressive menu path uses it, playback is left untouched. */
     fprintf(stderr, "video: %s %ux%u%s %.3f MHz htotal=%u vtotal=%u "
             "flags=0x%x on Composite-1, field parity %u\n",
             v->mode.name, v->mode.hdisplay, v->mode.vdisplay,
@@ -515,6 +519,67 @@ void pidvd_video_toggle_field_parity(pidvd_video_t *v)
             g_field_calib, v->field_parity);
 }
 
+/* Horizontal low-pass for the composite MENU scanout. Sharp 2-4px UI text
+ * carries luma energy above the NTSC/PAL colour subcarrier (~3.6/4.4 MHz),
+ * which the TV's chroma decoder reads as false colour (cross-colour splotches
+ * and edge fringing on text). Band-limit each row so that energy drops below
+ * the subcarrier. Granular: level 0 = off, 1..8 from faint to strong, with
+ * level 4 = the [1 2 1]/4 kernel. Symmetric integer kernels, edge-clamped;
+ * XRGB8888 (B,G,R,X). The driving SETTINGS option lets the user pick the
+ * lightest level that clears the splotching on their CRT. */
+struct hfk { uint8_t radius, divisor; int8_t tap[7]; };
+static const struct hfk HFK[9] = {
+    { 0,  1, { 0 } },                      /* 0 off (handled before lookup) */
+    { 1, 32, { 1, 30, 1 } },               /* 1 faintest */
+    { 1, 16, { 1, 14, 1 } },               /* 2 */
+    { 1,  8, { 1,  6, 1 } },               /* 3 (default) */
+    { 1,  4, { 1,  2, 1 } },               /* 4 = the tested [1 2 1]/4 */
+    { 1,  3, { 1,  1, 1 } },               /* 5 box-3 */
+    { 2,  9, { 1, 2, 3, 2, 1 } },          /* 6 */
+    { 2,  5, { 1, 1, 1, 1, 1 } },          /* 7 box-5 */
+    { 3,  7, { 1, 1, 1, 1, 1, 1, 1 } },    /* 8 box-7 strongest */
+};
+
+static void hfilter_row(uint32_t *dst, const uint32_t *src, int w,
+                        unsigned level)
+{
+    if (level == 0 || level > 8 || w < 3) {
+        memcpy(dst, src, (size_t)w * 4);
+        return;
+    }
+    const struct hfk *f = &HFK[level];
+    int radius = f->radius, div = f->divisor;
+    for (int x = 0; x < w; x++) {
+        int b = 0, g = 0, r = 0;
+        for (int t = -radius; t <= radius; t++) {
+            int xi = x + t;
+            xi = xi < 0 ? 0 : (xi >= w ? w - 1 : xi);
+            uint32_t p = src[xi];
+            int wt = f->tap[t + radius];
+            b += wt * (int)(p & 0xff);
+            g += wt * (int)((p >> 8) & 0xff);
+            r += wt * (int)((p >> 16) & 0xff);
+        }
+        dst[x] = (uint32_t)(b / div) | ((uint32_t)(g / div) << 8)
+               | ((uint32_t)(r / div) << 16);
+    }
+}
+
+/* Set the menu's composite horizontal low-pass level (0=off..8). Driven by
+ * the SETTINGS COMP FILTER option; takes effect on the picker's next present
+ * (it re-presents every loop), so changes are live. */
+void pidvd_video_set_hfilter(pidvd_video_t *v, unsigned level)
+{
+    if (!v)
+        return;
+    if (level > 8)
+        level = 8;
+    if (v->hfilter != level) {
+        v->hfilter = level;
+        fprintf(stderr, "video: menu comp-filter -> %u\n", level);
+    }
+}
+
 bool pidvd_video_present(pidvd_video_t *v, pidvd_frame_t *f,
                          bool tff, bool rff)
 {
@@ -536,8 +601,9 @@ bool pidvd_video_present(pidvd_video_t *v, pidvd_frame_t *f,
         struct kms_buf *b = &v->buf[v->back];
         int bpl = v->mode.hdisplay * 4;
         for (int y = 0; y < v->mode.vdisplay; y++)
-            memcpy(b->map + (size_t)y * b->pitch,
-                   v->scratch + (size_t)(2 * y) * bpl, (size_t)bpl);
+            hfilter_row((uint32_t *)(b->map + (size_t)y * b->pitch),
+                        (const uint32_t *)(v->scratch + (size_t)(2 * y) * bpl),
+                        v->mode.hdisplay, v->hfilter);
     } else {
         uint32_t crtcbits =
             (uint32_t)v->crtc_index << DRM_VBLANK_HIGH_CRTC_SHIFT;

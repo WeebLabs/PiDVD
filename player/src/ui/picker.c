@@ -87,6 +87,7 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
     vo.video = pidvd_video_open_mode(MENU_STD, PIDVD_SCAN_PROGRESSIVE);
     if (!vo.video)
         return -1;
+    pidvd_video_set_hfilter(vo.video, (unsigned)set->comp_filter);
     pidvd_input_t *in = pidvd_input_open();
 
     static const ui_item_t *view_items[MAX_VIEW];
@@ -156,6 +157,8 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
             default:
                 break;
             }
+            /* COMP FILTER applies live on the CRT as it's cycled. */
+            pidvd_video_set_hfilter(vo.video, (unsigned)set->comp_filter);
         } else if (view.screen == UI_BROWSE && cat) {
             catalog_lock(cat);
             int n = catalog_count(cat);

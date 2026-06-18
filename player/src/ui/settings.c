@@ -23,6 +23,11 @@ static const char *const layout_v[] = { "CONSOLE", "MARQUEE", "LEDGER",
 static const char *const audio_v[]  = { "STEREO DOWNMIX", "AC-3 PASSTHROUGH" };
 static const char *const dim_v[]    = { "OFF", "AFTER 5 MIN", "AFTER 15 MIN",
                                         "AFTER 30 MIN" };
+/* Menu composite horizontal low-pass: 0 off, 1..8 faint->strong. 4 is the
+ * [1 2 1]/4 kernel; lower = sharper text / more cross-colour, higher = softer
+ * text / cleaner colour. Tune to the lightest that clears the splotching. */
+static const char *const filter_v[] = { "OFF", "1", "2", "3", "4",
+                                        "5", "6", "7", "8" };
 
 static const struct {
     const char *label;
@@ -33,6 +38,7 @@ static const struct {
     [UI_SET_LAYOUT] = { "LAYOUT",         layout_v, 4 },
     [UI_SET_AUDIO]  = { "AUDIO OUTPUT",   audio_v,  2 },
     [UI_SET_DIM]    = { "ATTRACT DIM",    dim_v,    4 },
+    [UI_SET_FILTER] = { "COMP FILTER",    filter_v, 9 },
     [UI_SET_RESCAN] = { "RESCAN CATALOG", 0,        0 },
 };
 
@@ -43,6 +49,7 @@ static int *field(ui_settings_t *s, int row)
     case UI_SET_LAYOUT: return &s->layout;
     case UI_SET_AUDIO:  return &s->audio_out;
     case UI_SET_DIM:    return &s->attract_dim;
+    case UI_SET_FILTER: return &s->comp_filter;
     default:            return 0;
     }
 }
@@ -77,6 +84,7 @@ void ui_settings_load(ui_settings_t *s)
     s->theme = 4;          /* TERMINAL (index into theme_v) */
     s->layout = 3;         /* WIREFRAME (index into layout_v) */
     s->attract_dim = 2;    /* 15 min — CRT kindness by default */
+    s->comp_filter = 5;    /* composite low-pass; tune in SETTINGS (0..8) */
     s->last_standard = 1;  /* last-disc standard for the resume shelf */
 
     int mnt;
@@ -98,6 +106,11 @@ void ui_settings_load(ui_settings_t *s)
             else if (!strcmp(line, "layout"))  s->layout = atoi(v) % 4;
             else if (!strcmp(line, "audio"))   s->audio_out = atoi(v) & 1;
             else if (!strcmp(line, "dim"))     s->attract_dim = atoi(v) & 3;
+            else if (!strcmp(line, "filter")) {
+                s->comp_filter = atoi(v);
+                if (s->comp_filter < 0 || s->comp_filter > 8)
+                    s->comp_filter = 5;
+            }
             else if (!strcmp(line, "last_std")) s->last_standard = atoi(v) & 1;
             else if (!strcmp(line, "last_disc"))
                 snprintf(s->last_disc, sizeof(s->last_disc), "%s", v);
@@ -117,10 +130,10 @@ void ui_settings_save(const ui_settings_t *s)
                      " 2>/dev/null || true");
     FILE *f = fopen(path, "w");
     if (f) {
-        fprintf(f, "theme=%d\nlayout=%d\naudio=%d\ndim=%d\n"
+        fprintf(f, "theme=%d\nlayout=%d\naudio=%d\ndim=%d\nfilter=%d\n"
                    "last_std=%d\nlast_disc=%s\n",
                 s->theme, s->layout, s->audio_out, s->attract_dim,
-                s->last_standard, s->last_disc);
+                s->comp_filter, s->last_standard, s->last_disc);
         fclose(f);
     }
     if (mnt) {

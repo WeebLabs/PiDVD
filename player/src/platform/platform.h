@@ -57,6 +57,10 @@ void pidvd_video_vblprobe(pidvd_video_t *v, int n);
  * not its absolute phase), so a motion menu's field-temporal content can come
  * up field-reversed (juddery) on some plays. This is the correction. */
 void pidvd_video_toggle_field_parity(pidvd_video_t *v);
+/* Set the menu's composite horizontal low-pass level (0=off..8): band-limits
+ * sharp UI text to composite's luma bandwidth, suppressing cross-colour on
+ * text. Driven by the SETTINGS "COMP FILTER" option. */
+void pidvd_video_set_hfilter(pidvd_video_t *v, unsigned level);
 
 /* ---- audio out ------------------------------------------------------- */
 typedef struct pidvd_audio pidvd_audio_t;
