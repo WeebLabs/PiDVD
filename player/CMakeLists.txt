@@ -19,6 +19,11 @@ target_link_libraries(pidvd_core PUBLIC PkgConfig::DVDREAD)
 add_executable(dvdinfo tools/dvdinfo.c)
 target_link_libraries(dvdinfo pidvd_core)
 
+# Web remote: a dependency-free HTTP server that writes the picker's control
+# words to /tmp/pidvd-ctl. Pure POSIX sockets, so it builds on the host too
+# (run it against a FIFO you `cat` to iterate the page without a Pi).
+add_executable(pidvd-remote tools/remote.c)
+
 # Picker UI, pure rendering half — host-buildable so screens can be
 # verified as PPMs (tools/uipreview.c) before touching the Pi.
 add_library(pidvd_ui_render STATIC
@@ -59,7 +64,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         pidvd_core pidvd_ui_render PkgConfig::DRM PkgConfig::MPEG2
         PkgConfig::DVDNAV PkgConfig::ALSA a52 m pthread)
 
-    install(TARGETS pidvd-player dvdinfo RUNTIME DESTINATION bin)
+    install(TARGETS pidvd-player pidvd-remote dvdinfo RUNTIME DESTINATION bin)
 else()
     install(TARGETS dvdinfo RUNTIME DESTINATION bin)
 endif()

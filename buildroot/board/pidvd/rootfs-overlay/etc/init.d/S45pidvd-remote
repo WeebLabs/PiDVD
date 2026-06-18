@@ -1,0 +1,18 @@
+#!/bin/sh
+# Pocket web remote: serves a remote-control page on :8080 and writes taps to
+# the player's /tmp/pidvd-ctl FIFO. Browse to http://<pi-ip>:8080/ from a
+# phone/laptop to drive the picker with no keyboard or IR attached. Decoupled
+# from the player — binds INADDR_ANY, so it comes up regardless of whether the
+# DHCP lease (S40network) has arrived yet and serves once it does.
+
+case "$1" in
+  start)
+    pidvd-remote 8080 /tmp/pidvd-ctl >/dev/null 2>&1 &
+    ;;
+  stop)
+    killall pidvd-remote 2>/dev/null
+    ;;
+  *)
+    echo "Usage: $0 {start|stop}"
+    ;;
+esac
