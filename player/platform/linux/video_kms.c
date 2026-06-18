@@ -32,8 +32,10 @@ struct pidvd_video {
     int crtc_index;
     uint32_t plane_id;       /* CRTC primary plane (same one legacy flips use) */
     unsigned field_parity;   /* vblank-sequence parity flips latch on */
+    unsigned field_phase;    /* running 3:2 parity offset (toggles per rff frame) */
     unsigned anchor_par;     /* vblank-count parity sampled at the last modeset */
     unsigned hfilter;        /* menu composite horizontal low-pass: 0=off..3 */
+    bool no_pulldown;        /* PIDVD_NO_PULLDOWN: force 2 fields/frame (kill switch) */
     bool progressive;        /* 240p/288p menu mode (decimated scanout) */
     pidvd_standard_t std;    /* drives the VEC composite norm (NTSC/PAL) */
     drmModeModeInfo mode;
@@ -392,6 +394,7 @@ static void calibrate_field_parity(pidvd_video_t *v)
         const char *e = getenv("PIDVD_FIELD_PARITY");
         g_field_calib = (e && e[0] == '1') ? 1 : 0;
     }
+    v->field_phase = 0;   /* fresh modeset starts in 2:2 phase (no pending 3:2 offset) */
     if (v->progressive) {
         v->field_parity = 0;
         return;
@@ -400,7 +403,14 @@ static void calibrate_field_parity(pidvd_video_t *v)
     drmVBlank w = { .request = { .type = DRM_VBLANK_RELATIVE | crtcbits,
                                  .sequence = 1 } };
     v->anchor_par = (drmWaitVBlank(v->fd, &w) == 0) ? (w.reply.sequence & 1u) : 0u;
-    v->field_parity = v->anchor_par ^ (unsigned)g_field_calib;
+    /* NTSC (525-line, htotal 858) and PAL (625, 864) start the PV on OPPOSITE
+     * fields — vc4 sets odd_field_first only for the 858 mode — so correct
+     * field dominance is inverted between the two standards. Fold that in so a
+     * single calibration (g_field_calib) serves both; without it, calibrating
+     * on a PAL disc leaves NTSC field order reversed (and vice versa), seen as
+     * a field-swap flash at hard cuts on interlaced video. */
+    unsigned std_term = (v->std == PIDVD_STD_NTSC) ? 1u : 0u;
+    v->field_parity = v->anchor_par ^ (unsigned)g_field_calib ^ std_term;
     fprintf(stderr, "video: field auto-cal: anchor par=%u calib=%d -> "
             "field_parity=%u\n", v->anchor_par, g_field_calib, v->field_parity);
 }
@@ -437,6 +447,10 @@ pidvd_video_t *pidvd_video_open_mode(pidvd_standard_t std, pidvd_scan_t scan)
     /* v->hfilter (menu composite low-pass) stays 0 until the picker pushes the
      * persisted SETTINGS value via pidvd_video_set_hfilter; only the
      * progressive menu path uses it, playback is left untouched. */
+    {
+        const char *np = getenv("PIDVD_NO_PULLDOWN");
+        v->no_pulldown = (np && np[0] == '1'); /* force 2 fields/frame */
+    }
     fprintf(stderr, "video: %s %ux%u%s %.3f MHz htotal=%u vtotal=%u "
             "flags=0x%x on Composite-1, field parity %u\n",
             v->mode.name, v->mode.hdisplay, v->mode.vdisplay,
@@ -584,13 +598,20 @@ bool pidvd_video_present(pidvd_video_t *v, pidvd_frame_t *f,
                          bool tff, bool rff)
 {
     (void)f;
-    /* Field-parity-locked flips. With the kernel patches (0001/0002)
-     * the vblank sequence ticks once per field and its parity IS the
-     * hardware field identity. Latch every flip on the configured
-     * parity: each weaved frame then starts on the same (top) field —
-     * 2 fields per frame, 25fps, field-exact for 2:2 content.
-     * TODO(field-sched): rff (NTSC 3:2) = hold one extra field. */
-    (void)tff; (void)rff;
+    /* Field-cadence flips. The vblank sequence ticks once per field (kernel
+     * patch 0002); each flip latches on the calibrated parity so the weave's
+     * top lines land on the physical top field. 2:2 content (PAL, 29.97i) is
+     * 2 fields per frame. 3:2 PULLDOWN (NTSC film, rff set): the rff frame
+     * occupies THREE field periods — we let its successor flip on the OPPOSITE
+     * parity (tracked in v->field_phase) so the 3rd field is held rather than
+     * "corrected" back into a 4-field stretch. Film fields are co-temporal, so
+     * this is a pure duration change; tff (temporal field order) stays handled
+     * by the dominance auto-cal. PIDVD_NO_PULLDOWN forces 2 fields/frame.
+     * NOTE: a frame landing on the inverted parity shows a faint ~1/2-line
+     * vertical bob (the line-shift re-weave is deferred). Cadence/timing is
+     * correct and output looks right on hardware — revisit the re-weave only
+     * if that bob proves objectionable on a real film disc. */
+    (void)tff;
 
     if (v->progressive) {
         /* Decimate the full-height render into the half-height scanout
@@ -607,12 +628,14 @@ bool pidvd_video_present(pidvd_video_t *v, pidvd_frame_t *f,
     } else {
         uint32_t crtcbits =
             (uint32_t)v->crtc_index << DRM_VBLANK_HIGH_CRTC_SHIFT;
+        /* anchor parity, offset by the running 3:2 field phase */
+        unsigned target = v->field_parity ^ v->field_phase;
         drmVBlank w = {
             .request = { .type = DRM_VBLANK_RELATIVE | crtcbits,
                          .sequence = 1 },
         };
         if (drmWaitVBlank(v->fd, &w) == 0
-            && ((w.reply.sequence + 1) & 1) != v->field_parity) {
+            && ((w.reply.sequence + 1) & 1) != target) {
             drmVBlank w2 = {
                 .request = { .type = DRM_VBLANK_RELATIVE | crtcbits,
                              .sequence = 1 },
@@ -637,6 +660,13 @@ bool pidvd_video_present(pidvd_video_t *v, pidvd_frame_t *f,
         drmHandleEvent(v->fd, &ev);
     }
     v->back ^= 1;
+
+    /* 3:2 pulldown: an rff frame is shown for 3 fields. Toggle the running
+     * field phase so the NEXT frame's flip lands on the opposite parity (a
+     * 3-field, odd, advance) instead of being re-aligned back to the 2-field
+     * cadence. Gated on rff, so 2:2 PAL / 29.97i never enter this path. */
+    if (rff && !v->no_pulldown)
+        v->field_phase ^= 1u;
 
     unsigned delta = evt.seq - v->last_flip_seq;
     v->last_flip_seq = evt.seq;
