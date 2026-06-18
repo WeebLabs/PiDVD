@@ -50,6 +50,13 @@ bool pidvd_video_present(pidvd_video_t *v, pidvd_frame_t *f,
 void pidvd_video_close(pidvd_video_t *v);
 /* diagnostic: print N successive vblank wait sequences/timings */
 void pidvd_video_vblprobe(pidvd_video_t *v, int n);
+/* Flip which vblank-sequence parity weaved frames latch on — i.e. invert
+ * output field dominance, live, with no modeset. The absolute mapping of
+ * sequence parity to the physical top field is only settled by a per-modeset
+ * hardware race on the VEC (the field-lock patch pins parity *consistency*,
+ * not its absolute phase), so a motion menu's field-temporal content can come
+ * up field-reversed (juddery) on some plays. This is the correction. */
+void pidvd_video_toggle_field_parity(pidvd_video_t *v);
 
 /* ---- audio out ------------------------------------------------------- */
 typedef struct pidvd_audio pidvd_audio_t;
@@ -75,6 +82,7 @@ typedef enum {
     PIDVD_KEY_PLAY_PAUSE, PIDVD_KEY_STOP,
     PIDVD_KEY_PREV_CHAPTER, PIDVD_KEY_NEXT_CHAPTER,
     PIDVD_KEY_AUDIO, PIDVD_KEY_SUBTITLE, PIDVD_KEY_ANGLE,
+    PIDVD_KEY_FIELD,   /* invert output field dominance (menu judder fix) */
 } pidvd_key_t;
 
 typedef struct pidvd_input pidvd_input_t;

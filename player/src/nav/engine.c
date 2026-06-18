@@ -311,6 +311,7 @@ static bool handle_key(struct engine *e, pidvd_key_t k)
     case PIDVD_KEY_NEXT_CHAPTER: dvdnav_next_pg_search(e->nav);     break;
     case PIDVD_KEY_PREV_CHAPTER: dvdnav_prev_pg_search(e->nav);     break;
     case PIDVD_KEY_STOP:   return false;
+    case PIDVD_KEY_FIELD:  pidvd_video_toggle_field_parity(e->video); break;
     default: break;
     }
     if (k == PIDVD_KEY_UP || k == PIDVD_KEY_DOWN || k == PIDVD_KEY_LEFT

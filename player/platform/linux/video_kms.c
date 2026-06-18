@@ -32,6 +32,7 @@ struct pidvd_video {
     int crtc_index;
     uint32_t plane_id;       /* CRTC primary plane (same one legacy flips use) */
     unsigned field_parity;   /* vblank-sequence parity flips latch on */
+    unsigned anchor_par;     /* vblank-count parity sampled at the last modeset */
     bool progressive;        /* 240p/288p menu mode (decimated scanout) */
     pidvd_standard_t std;    /* drives the VEC composite norm (NTSC/PAL) */
     drmModeModeInfo mode;
@@ -365,6 +366,44 @@ static bool select_mode(pidvd_video_t *v, pidvd_standard_t std,
     return false;
 }
 
+/* Auto-calibrate output field dominance after a modeset.
+ *
+ * On the VC4 VEC (Pi3, GEN_4) the physical field the PV starts on is a
+ * per-modeset coin flip and there is NO readable field register. But the
+ * cumulative DRM vblank-count parity at the first vblank after the modeset
+ * was measured (18/18 plays, across reboots) to predict that dominance
+ * exactly — the player already aligns flips to this counter via field_parity,
+ * so it cannot pin the field but it CAN read which one it got and compensate.
+ * Sample that parity and set field_parity = anchor_par ^ field_calib so the
+ * weave always lands on the correct field. field_calib is the one-bit
+ * per-install convention (default 1; PIDVD_KEY_FIELD flips it if a unit ever
+ * comes up inverted). Progressive (menu) scanout has no field identity. */
+/* Per-install field-dominance calibration bit: which sampled anchor parity
+ * counts as 'correct'. Process-global (NOT per pidvd_video_t) so a
+ * PIDVD_KEY_FIELD correction holds across plays — the player re-opens video
+ * each play. Default 0 = measured correct on this board; PIDVD_FIELD_PARITY=1
+ * inverts it for a unit that ever boots reversed. -1 = not yet read. */
+static int g_field_calib = -1;
+
+static void calibrate_field_parity(pidvd_video_t *v)
+{
+    if (g_field_calib < 0) {
+        const char *e = getenv("PIDVD_FIELD_PARITY");
+        g_field_calib = (e && e[0] == '1') ? 1 : 0;
+    }
+    if (v->progressive) {
+        v->field_parity = 0;
+        return;
+    }
+    uint32_t crtcbits = (uint32_t)v->crtc_index << DRM_VBLANK_HIGH_CRTC_SHIFT;
+    drmVBlank w = { .request = { .type = DRM_VBLANK_RELATIVE | crtcbits,
+                                 .sequence = 1 } };
+    v->anchor_par = (drmWaitVBlank(v->fd, &w) == 0) ? (w.reply.sequence & 1u) : 0u;
+    v->field_parity = v->anchor_par ^ (unsigned)g_field_calib;
+    fprintf(stderr, "video: field auto-cal: anchor par=%u calib=%d -> "
+            "field_parity=%u\n", v->anchor_par, g_field_calib, v->field_parity);
+}
+
 pidvd_video_t *pidvd_video_open_mode(pidvd_standard_t std, pidvd_scan_t scan)
 {
     pidvd_video_t *v = calloc(1, sizeof(*v));
@@ -391,8 +430,9 @@ pidvd_video_t *pidvd_video_open_mode(pidvd_standard_t std, pidvd_scan_t scan)
     }
     if (!setup_mode(v))
         goto fail;
-    const char *par = getenv("PIDVD_FIELD_PARITY");
-    v->field_parity = (par && par[0] == '1') ? 1 : 0;
+    /* Derive field_parity per-modeset from the sampled anchor parity and the
+     * process-global calibration bit (PIDVD_FIELD_PARITY seeds it). */
+    calibrate_field_parity(v);
     fprintf(stderr, "video: %s %ux%u%s %.3f MHz htotal=%u vtotal=%u "
             "flags=0x%x on Composite-1, field parity %u\n",
             v->mode.name, v->mode.hdisplay, v->mode.vdisplay,
@@ -416,6 +456,7 @@ bool pidvd_video_set_mode(pidvd_video_t *v, pidvd_standard_t std,
     free_buffers(v);
     if (!select_mode(v, std, scan) || !setup_mode(v))
         return false;
+    calibrate_field_parity(v);   /* the new modeset re-rolled the field phase */
     fprintf(stderr, "video: switched to %s %ux%u%s %.3f MHz htotal=%u "
             "vtotal=%u flags=0x%x\n", v->mode.name, v->mode.hdisplay,
             v->mode.vdisplay, v->progressive ? "p" : "i",
@@ -457,6 +498,21 @@ static void flip_done(int fd, unsigned frame, unsigned sec, unsigned usec,
     (void)fd; (void)sec; (void)usec;
     e->seq = frame;
     e->pending = false;
+}
+
+void pidvd_video_toggle_field_parity(pidvd_video_t *v)
+{
+    if (!v || v->progressive)
+        return;   /* progressive scanout has no field identity to flip */
+    /* Flip the 1-bit calibration and re-derive field_parity from this
+     * modeset's sampled anchor parity. This both flips the current output
+     * (presenter re-reads field_parity each present — one-frame latency, an
+     * aligned unsigned store is atomic on A53) AND sticks for the session, so
+     * subsequent plays / standard changes stay corrected via calibrate_*. */
+    g_field_calib ^= 1;
+    v->field_parity = v->anchor_par ^ (unsigned)g_field_calib;
+    fprintf(stderr, "video: field calib -> %d (field_parity=%u, live)\n",
+            g_field_calib, v->field_parity);
 }
 
 bool pidvd_video_present(pidvd_video_t *v, pidvd_frame_t *f,
