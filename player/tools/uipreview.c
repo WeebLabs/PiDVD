@@ -11,6 +11,7 @@
 #include <sys/stat.h>
 
 #include "ui/render.h"
+#include "ui/saver.h"
 
 #define W 720
 #define H 576
@@ -156,6 +157,25 @@ int main(int argc, char **argv)
     pidvd_ui_render(&c, &v);
     snprintf(path, sizeof(path), "%s/attract-amber-ice.ppm", out);
     write_ppm(path, px);
+
+    /* Warp starfield screensaver — a single representative field, in a few
+     * themes (it's animated, so the live look needs a CRT/Pi). */
+    set.saver = PIDVD_SAVER_WARP;
+    v.saver_active = true;
+    v.tick = 240;
+    set.theme = 1;  /* phosphor amber */
+    pidvd_ui_render(&c, &v);
+    snprintf(path, sizeof(path), "%s/saver-warp-phosphor.ppm", out);
+    write_ppm(path, px);
+    set.theme = 2;  /* vfd cyan */
+    pidvd_ui_render(&c, &v);
+    snprintf(path, sizeof(path), "%s/saver-warp-vfd.ppm", out);
+    write_ppm(path, px);
+    set.theme = 4;  /* terminal — black void */
+    pidvd_ui_render(&c, &v);
+    snprintf(path, sizeof(path), "%s/saver-warp-terminal.ppm", out);
+    write_ppm(path, px);
+    v.saver_active = false;
 
     printf("wrote previews to %s/\n", out);
     free(px);

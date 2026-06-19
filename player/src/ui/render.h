@@ -66,6 +66,7 @@ typedef struct {
     int set_sel;
 
     int tick;                     /* field-rate frame counter (animation) */
+    bool saver_active;            /* idle: draw the screensaver over `screen` */
 } ui_view_t;
 
 void pidvd_ui_render(ui_canvas_t *c, const ui_view_t *v);

@@ -291,6 +291,8 @@ from ATTRACT. Same chrome as BROWSE; one centered panel:
    LAYOUT            ◂ CONSOLE ▸
    AUDIO OUTPUT      ◂ STEREO DOWNMIX ▸
    ATTRACT DIM       ◂ AFTER 15 MIN ▸
+   SCREENSAVER       ◂ WARP STARFIELD ▸
+   COMP FILTER       ◂ 5 ▸
    RESCAN CATALOG    ⏎
 
    PIDVD 0.4 · 2025.02 · CRT NEVER LIES
@@ -304,13 +306,34 @@ from ATTRACT. Same chrome as BROWSE; one centered panel:
   action rows (rescan). MENU or STOP exits.
 - Values: THEME (§2 four), LAYOUT (CONSOLE/MARQUEE/LEDGER), AUDIO OUTPUT
   (STEREO DOWNMIX / AC-3 PASSTHROUGH), ATTRACT DIM (OFF / 5 / 15 / 30 MIN —
-  blanks to the drifting logo bug, CRT burn-in kindness). There is *no*
-  menu-mode setting: the menu is always 240p NTSC (§1).
+  blanks to the drifting logo bug, CRT burn-in kindness), SCREENSAVER
+  (OFF / WARP STARFIELD — §5.7), COMP FILTER (OFF / 1..8, the menu's
+  composite low-pass). There is *no* menu-mode setting: the menu is always
+  240p NTSC (§1).
 - **Persistence**: `pidvd.cfg` (`key=value`) on the SD boot partition —
   the appliance's NVRAM, independent of whatever drive is inserted.
   Write path: remount rw → write → sync → remount ro; failure degrades
   to RAM for the session. The same file carries `last_standard` and the
   last-played disc for the shelf.
+
+### 5.7 SCREENSAVER
+
+After `PIDVD_SAVER_IDLE_SECONDS` (90 s, a code knob in `ui/saver.h` — not the
+SETTINGS "ATTRACT DIM") with no input on any picker screen (ATTRACT, BROWSE
+or SETTINGS), the selected screensaver paints over the screen. The first
+keypress only wakes it (consumed); input resumes normally after. The
+underlying screen keeps running while it's up, so waking lands exactly where
+you left off. It never appears during playback (a separate path).
+
+One effect today, **WARP STARFIELD** — stars streaming out of a drifting
+vanishing point as if jumped to hyperspace, drawn in the active theme's
+colours (hot-coloured "hero" stars sparkle among them). It's pure,
+*stateless* pixel code (`ui/saver.c`): a star's position at field N is a
+function of its seed and the global warp phase, so it slots into picker.c's
+view-model-in/pixels-out render path with no per-frame state. The whole look
+(star count, speed, streak length, warp acceleration, field roll/drift,
+speed "breathing") is a block of tunables at the top of `ui/saver.c`. The
+selection is in `pidvd.cfg` as `saver=`; the enum leaves room for more.
 
 ## 6. Input map (BROWSE context)
 
