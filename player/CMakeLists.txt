@@ -3,6 +3,7 @@ project(pidvd C)
 
 set(CMAKE_C_STANDARD 11)
 add_compile_options(-Wall -Wextra)
+include(CTest)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(DVDREAD REQUIRED IMPORTED_TARGET dvdread)
@@ -14,6 +15,16 @@ add_library(pidvd_core STATIC
 )
 target_include_directories(pidvd_core PUBLIC src)
 target_link_libraries(pidvd_core PUBLIC PkgConfig::DVDREAD)
+
+if(BUILD_TESTING)
+    add_executable(av_sync_test
+        tests/av_sync_test.c
+        src/sync/av_sync.c
+    )
+    target_include_directories(av_sync_test PRIVATE src)
+    target_link_libraries(av_sync_test m pthread)
+    add_test(NAME av_sync COMMAND av_sync_test)
+endif()
 
 # Host/dev tool: dump disc structure and detected video standard from an ISO
 add_executable(dvdinfo tools/dvdinfo.c)
@@ -44,6 +55,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     pkg_check_modules(MPEG2 REQUIRED IMPORTED_TARGET libmpeg2 libmpeg2convert)
     pkg_check_modules(DVDNAV REQUIRED IMPORTED_TARGET dvdnav)
     pkg_check_modules(ALSA REQUIRED IMPORTED_TARGET alsa)
+    pkg_check_modules(SPEEXDSP REQUIRED IMPORTED_TARGET speexdsp)
 
     add_executable(pidvd-player
         src/player/main.c
@@ -55,6 +67,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         src/decode/audio_a52.c
         src/decode/spu.c
         src/present/presenter.c
+        src/sync/av_sync.c
+        src/sync/audio_playback.c
+        src/sync/audio_resampler.c
         platform/linux/video_kms.c
         platform/linux/audio_alsa.c
         platform/linux/input_evdev.c
@@ -62,7 +77,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_include_directories(pidvd-player PRIVATE platform)
     target_link_libraries(pidvd-player
         pidvd_core pidvd_ui_render PkgConfig::DRM PkgConfig::MPEG2
-        PkgConfig::DVDNAV PkgConfig::ALSA a52 m pthread)
+        PkgConfig::DVDNAV PkgConfig::ALSA PkgConfig::SPEEXDSP a52 m pthread)
 
     install(TARGETS pidvd-player pidvd-remote dvdinfo RUNTIME DESTINATION bin)
 else()

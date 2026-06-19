@@ -64,9 +64,6 @@ static int ui_main(void)
         snprintf(set.last_disc, sizeof(set.last_disc), "%s", iso);
         ui_settings_save(&set);
 
-        /* the engine picks this up when passthrough lands (milestone 2b+) */
-        setenv("PIDVD_AUDIO", set.audio_out ? "passthrough" : "stereo", 1);
-
         display_name(iso, now_buf, sizeof(now_buf));
         printf("pidvd: playing %s\n", iso);
         pidvd_nav_play(iso);

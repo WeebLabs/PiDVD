@@ -18,17 +18,24 @@
 #include "demux/ps.h"
 #include "platform/platform.h"
 #include "present/presenter.h"
+#include "sync/audio_playback.h"
+#include "sync/av_sync.h"
 
 #define FRAME_W 720
 #define FRAME_H 576
 
-#define ARING 64   /* AC-3 frames of 32ms each ~= 2s */
+#define ARING 128       /* four seconds: absorbs navigation/decode bursts */
+#define AUDIO_STAGE 8   /* 256 ms maximum; normal prime consumes four chunks */
 
 struct achunk {
     int16_t pcm[1536 * 2];
     int nframes;
     int rate;
     int64_t pts;
+    int64_t video_start_pts;
+    uint64_t epoch;
+    uint64_t serial;
+    bool gates_video;
 };
 
 struct engine {
@@ -44,12 +51,16 @@ struct engine {
     /* audio thread + ring */
     pthread_t audio_thread;
     pthread_mutex_t a_lock;
-    pthread_cond_t a_cond;
+    pthread_cond_t a_not_empty, a_not_full;
     struct achunk aring[ARING];
     int a_head, a_tail, a_count;
     bool a_run;
     int cur_audio;          /* selected AC-3 substream */
     int64_t vpts0;          /* first displayed video pts (start gate) */
+    uint64_t epoch;
+    uint64_t audio_serial;
+    bool audio_gates_video;
+    pidvd_av_sync_t *sync;
 
     pidvd_standard_t std;
     /* last decoded frame (planar), kept for re-pushing during stills */
@@ -58,6 +69,7 @@ struct engine {
     bool have_frame;
     pthread_mutex_t spu_lock;   /* spu state vs presenter blend thread */
     bool tff, rff;
+    int64_t pts;            /* last decoded frame's pts, forwarded to presenter */
     long frames;
     /* producer timing */
     double t_prev, t_acc, t_max;
@@ -102,12 +114,59 @@ static void blend_overlay(void *opaque, uint8_t *rgb, int w, int h)
     pthread_mutex_unlock(&e->spu_lock);
 }
 
+static void prepare_epoch(void *ctx, uint64_t epoch)
+{
+    struct engine *e = ctx;
+    /* Local DVD playback should reach this barrier quickly. A finite timeout
+     * keeps silent, malformed, or unsupported streams from holding video. */
+    pidvd_av_sync_wait_audio_ready(e->sync, epoch, 1500);
+}
+
+static void presented_frame(void *ctx, uint64_t epoch, int64_t pts,
+                            const pidvd_video_stamp_t *stamp)
+{
+    struct engine *e = ctx;
+    pidvd_av_sync_video_presented(e->sync, epoch, pts,
+                                  stamp->monotonic_ns);
+}
+
+static uint64_t reset_audio_queue(struct engine *e, bool new_epoch,
+                                  bool gate_video)
+{
+    pthread_mutex_lock(&e->a_lock);
+    if (new_epoch)
+        e->epoch++;
+    e->audio_serial++;
+    e->audio_gates_video = gate_video;
+    uint64_t epoch = e->epoch;
+    e->a_head = e->a_tail = e->a_count = 0;
+    pthread_cond_broadcast(&e->a_not_empty);
+    pthread_cond_broadcast(&e->a_not_full);
+    pthread_mutex_unlock(&e->a_lock);
+    return epoch;
+}
+
+static void reset_stream_epoch(struct engine *e)
+{
+    uint64_t epoch = reset_audio_queue(e, true, true);
+    e->vpts0 = -1;
+    e->have_frame = false;
+    pidvd_av_sync_reset(e->sync, epoch);
+    pidvd_presenter_reset(e->pres);
+}
+
+static void reset_audio_stream(struct engine *e)
+{
+    bool video_started = pidvd_av_sync_video_is_started(e->sync, e->epoch);
+    reset_audio_queue(e, false, !video_started);
+}
+
 static void push_composed(struct engine *e)
 {
     if (!e->have_frame)
         return;
     pidvd_presenter_push(e->pres, e->fy, e->fu, e->fv, e->vw, e->vh,
-                         e->tff, e->rff);
+                         e->tff, e->rff, e->pts, e->epoch);
     e->frames++;
 }
 
@@ -170,6 +229,7 @@ static void on_frame(void *opaque, const uint8_t *y, const uint8_t *u,
     e->vh = h;
     e->tff = tff;
     e->rff = rff;
+    e->pts = pts;
     e->have_frame = true;
     if (e->frames == 0) {
         FILE *up = fopen("/proc/uptime", "r");
@@ -209,64 +269,209 @@ static void on_audio_es(void *opaque, int substream, const uint8_t *data,
     pidvd_adec_push(e->adec, data, len, pts);
 }
 
-/* decoded AC-3 frames land in the ring (drop-oldest if full — audio
- * must never stall the nav/decode thread) */
+/* Decoded AC-3 frames land in a lossless bounded queue. Four seconds of
+ * capacity leaves ample burst tolerance; blocking is preferable to an audible
+ * discontinuity and a permanently invalid output timeline. */
 static void on_audio_pcm(void *opaque, const int16_t *frames, int nframes,
                          int rate, int64_t pts)
 {
     struct engine *e = opaque;
-    /* start gate: drop audio from before the first displayed frame */
-    if (e->vpts0 < 0 || (pts >= 0 && pts < e->vpts0))
+    if (e->vpts0 < 0 || pts < 0)
         return;
+
+    const int16_t *src = frames;
+    int keep = nframes;
+    int64_t kept_pts = pts;
+    if (pts < e->vpts0) {
+        int64_t early = e->vpts0 - pts;
+        int trim = (int)((early * rate + 89999) / 90000);
+        if (trim >= keep)
+            return;
+        src += (size_t)trim * 2;
+        keep -= trim;
+        kept_pts += (int64_t)trim * 90000 / rate;
+    }
+
     pthread_mutex_lock(&e->a_lock);
-    if (e->a_count == ARING) {
-        e->a_tail = (e->a_tail + 1) % ARING;
-        e->a_count--;
+    while (e->a_count == ARING && e->a_run)
+        pthread_cond_wait(&e->a_not_full, &e->a_lock);
+    if (!e->a_run) {
+        pthread_mutex_unlock(&e->a_lock);
+        return;
     }
     struct achunk *c = &e->aring[e->a_head];
-    memcpy(c->pcm, frames, (size_t)nframes * 4);
-    c->nframes = nframes;
+    memcpy(c->pcm, src, (size_t)keep * 4);
+    c->nframes = keep;
     c->rate = rate;
-    c->pts = pts;
+    c->pts = kept_pts;
+    c->video_start_pts = e->audio_gates_video ? e->vpts0 : kept_pts;
+    c->epoch = e->epoch;
+    c->serial = e->audio_serial;
+    c->gates_video = e->audio_gates_video;
     e->a_head = (e->a_head + 1) % ARING;
     e->a_count++;
-    pthread_cond_signal(&e->a_cond);
+    pthread_cond_signal(&e->a_not_empty);
     pthread_mutex_unlock(&e->a_lock);
+}
+
+static bool write_aligned_audio(pidvd_audio_playback_t *playback,
+                                struct achunk *c, int64_t start_pts,
+                                bool *first_chunk)
+{
+    if (*first_chunk) {
+        int64_t end = c->pts + (int64_t)c->nframes * 90000 / c->rate;
+        if (end <= start_pts)
+            return true;
+        if (c->pts < start_pts) {
+            int trim = (int)(((start_pts - c->pts) * c->rate + 89999)
+                             / 90000);
+            if (trim >= c->nframes)
+                return true;
+            memmove(c->pcm, c->pcm + (size_t)trim * 2,
+                    (size_t)(c->nframes - trim) * 4);
+            c->nframes -= trim;
+            c->pts += (int64_t)trim * 90000 / c->rate;
+        }
+        if (!pidvd_audio_playback_write_gap(playback, start_pts, c->pts))
+            return false;
+        *first_chunk = false;
+    }
+    return pidvd_audio_playback_write(playback, c->pcm,
+                                      c->nframes, c->pts);
 }
 
 static void *audio_loop(void *opaque)
 {
     struct engine *e = opaque;
-    pidvd_audio_t *out = NULL;
-    int rate = 0;
+    /* Keep the complete audio pipeline together and off the deadline-critical
+     * presenter core. Nav/decode use CPUs 0-1; audio owns CPU 2, while video
+     * presentation owns CPU 3 exclusively. */
+    cpu_set_t cpus;
+    CPU_ZERO(&cpus);
+    CPU_SET(2, &cpus);
+    pthread_setaffinity_np(pthread_self(), sizeof(cpus), &cpus);
+    struct sched_param sp = { .sched_priority = 30 };
+    pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);
+
+    pidvd_audio_playback_t *playback = NULL;
+    uint64_t local_epoch = 0;
+    uint64_t local_serial = 0;
+    bool disabled = false;
+    bool first_chunk = true;
+    int64_t alignment_pts = -1;
+    bool alignment_follows_display = false;
+    struct achunk staged[AUDIO_STAGE];
+    int staged_count = 0, staged_frames = 0, staged_rate = 0;
+
     for (;;) {
         pthread_mutex_lock(&e->a_lock);
-        while (e->a_count == 0 && e->a_run)
-            pthread_cond_wait(&e->a_cond, &e->a_lock);
-        if (!e->a_run && e->a_count == 0) {
+        while (e->a_count == 0 && e->a_run
+               && local_serial == e->audio_serial)
+            pthread_cond_wait(&e->a_not_empty, &e->a_lock);
+        if (!e->a_run) {
             pthread_mutex_unlock(&e->a_lock);
             break;
+        }
+        if (local_serial != e->audio_serial) {
+            local_serial = e->audio_serial;
+            local_epoch = e->epoch;
+            pthread_mutex_unlock(&e->a_lock);
+            pidvd_audio_playback_free(playback, true);
+            playback = NULL;
+            disabled = false;
+            first_chunk = true;
+            alignment_pts = -1;
+            alignment_follows_display = false;
+            staged_count = staged_frames = staged_rate = 0;
+            continue;
         }
         struct achunk c = e->aring[e->a_tail];
         e->a_tail = (e->a_tail + 1) % ARING;
         e->a_count--;
+        pthread_cond_signal(&e->a_not_full);
         pthread_mutex_unlock(&e->a_lock);
 
-        if (!out || rate != c.rate) {
-            if (out)
-                pidvd_audio_close(out);
-            out = pidvd_audio_open(PIDVD_AUDIO_PCM_STEREO, c.rate);
-            rate = c.rate;
-            if (!out) {
-                fprintf(stderr, "audio: output unavailable, muting\n");
-                e->a_run = false;
-                break;
-            }
+        if (c.epoch != local_epoch || c.serial != local_serial)
+            continue;
+        if (disabled)
+            continue;
+
+        if (playback && pidvd_audio_playback_rate(playback) != c.rate) {
+            pidvd_audio_playback_free(playback, true);
+            playback = NULL;
+            first_chunk = true;
+            alignment_pts = -1;
+            alignment_follows_display = false;
+            staged_count = staged_frames = staged_rate = 0;
+            c.gates_video = false; /* video is already running at a rate change */
         }
-        pidvd_audio_write(out, c.pcm, c.nframes);
+
+        if (!playback) {
+            if (staged_count && staged_rate != c.rate) {
+                staged_count = staged_frames = 0;
+                c.gates_video = false;
+            }
+            if (staged_count == AUDIO_STAGE) {
+                /* The normal four-chunk prime cannot reach this. If malformed
+                 * timing does, retain the newest bounded window. */
+                int dropped = staged[0].nframes;
+                memmove(staged, staged + 1,
+                        (AUDIO_STAGE - 1) * sizeof(staged[0]));
+                staged_count--;
+                staged_frames -= dropped;
+            }
+            staged[staged_count++] = c;
+            staged_frames += c.nframes;
+            staged_rate = c.rate;
+            if (staged_frames
+                < pidvd_audio_playback_prime_frames(staged_rate))
+                continue;
+
+            alignment_pts = staged[0].video_start_pts;
+            alignment_follows_display = !staged[0].gates_video;
+            if (alignment_follows_display) {
+                int64_t display_pts;
+                if (pidvd_av_sync_display_now(e->sync, local_epoch,
+                                              &display_pts))
+                    alignment_pts = display_pts;
+            }
+            playback = pidvd_audio_playback_new(e->sync,
+                                                local_epoch, staged_rate);
+            if (!playback) {
+                fprintf(stderr, "audio: output unavailable, muting\n");
+                pidvd_av_sync_audio_ready(e->sync, local_epoch, false);
+                disabled = true;
+                staged_count = staged_frames = staged_rate = 0;
+                continue;
+            }
+            bool ok = true;
+            for (int i = 0; i < staged_count && ok; i++)
+                ok = write_aligned_audio(playback, &staged[i],
+                                         alignment_pts, &first_chunk);
+            staged_count = staged_frames = staged_rate = 0;
+            if (ok)
+                continue;
+        } else {
+            if (first_chunk && alignment_follows_display) {
+                int64_t display_pts;
+                if (pidvd_av_sync_display_now(e->sync, local_epoch,
+                                              &display_pts))
+                    alignment_pts = display_pts;
+            }
+            bool ok = write_aligned_audio(playback, &c, alignment_pts,
+                                          &first_chunk);
+            if (ok)
+                continue;
+        }
+
+        /* Any path reaching here failed the output timeline. */
+        fprintf(stderr, "audio: playback timeline failed, muting epoch\n");
+        pidvd_av_sync_audio_ready(e->sync, local_epoch, false);
+        pidvd_audio_playback_free(playback, true);
+        playback = NULL;
+        disabled = true;
     }
-    if (out)
-        pidvd_audio_close(out);
+    pidvd_audio_playback_free(playback, false);
     return NULL;
 }
 
@@ -338,16 +543,26 @@ int pidvd_nav_play(const char *iso_path)
     e.video = pidvd_video_open(e.std);
     if (!e.video)
         return 1;
-    /* nav+decode on cores 0-2; core 3 belongs to the presenter */
+    /* nav+decode use cores 0-1; CPU 2 owns resampling/ALSA and CPU 3 owns
+     * presentation. Neither support pipeline can preempt the video core. */
     cpu_set_t cpus;
     CPU_ZERO(&cpus);
-    CPU_SET(0, &cpus); CPU_SET(1, &cpus); CPU_SET(2, &cpus);
+    CPU_SET(0, &cpus); CPU_SET(1, &cpus);
     pthread_setaffinity_np(pthread_self(), sizeof(cpus), &cpus);
 
     pthread_mutex_init(&e.spu_lock, NULL);
+    pthread_mutex_init(&e.a_lock, NULL);
+    pthread_cond_init(&e.a_not_empty, NULL);
+    pthread_cond_init(&e.a_not_full, NULL);
+    e.sync = pidvd_av_sync_new();
+    e.epoch = 1;
+    e.audio_serial = 1;
+    e.audio_gates_video = true;
+    pidvd_av_sync_reset(e.sync, e.epoch);
     pidvd_frame_t *dims = pidvd_video_begin_frame(e.video);
     e.pres = pidvd_presenter_start(e.video, dims->width, dims->height,
-                                   blend_overlay, &e);
+                                   blend_overlay, &e, prepare_epoch,
+                                   presented_frame, &e);
     e.vdec = pidvd_vdec_new(on_frame, &e);
     e.spu = pidvd_spu_new();
     e.adec = pidvd_adec_new(on_audio_pcm, &e);
@@ -355,8 +570,6 @@ int pidvd_nav_play(const char *iso_path)
     e.vpts0 = -1;
     e.cur_audio = 0;
     e.a_run = true;
-    pthread_mutex_init(&e.a_lock, NULL);
-    pthread_cond_init(&e.a_cond, NULL);
     pthread_create(&e.audio_thread, NULL, audio_loop, &e);
     e.fy = calloc(1, FRAME_W * FRAME_H);
     e.fu = calloc(1, FRAME_W * FRAME_H / 4);
@@ -437,6 +650,11 @@ int pidvd_nav_play(const char *iso_path)
             update_highlight(&e, false);
             break;
         case DVDNAV_VTS_CHANGE: {
+            pidvd_vdec_reset(e.vdec);
+            pidvd_adec_reset(e.adec);
+            pidvd_spu_clear(e.spu);
+            /* Quiesce presentation before touching KMS mode state. */
+            reset_stream_epoch(&e);
             uint32_t w = 0, h = 0;
             if (dvdnav_get_video_resolution(e.nav, &w, &h) == 0 && h) {
                 pidvd_standard_t want = (h == 576 || h == 288)
@@ -448,17 +666,13 @@ int pidvd_nav_play(const char *iso_path)
                     e.std = want;
                 }
             }
-            pidvd_vdec_reset(e.vdec);
-            pidvd_adec_reset(e.adec);
-            pidvd_spu_clear(e.spu);
-            e.vpts0 = -1;
             break;
         }
         case DVDNAV_HOP_CHANNEL:
             pidvd_vdec_reset(e.vdec);
             pidvd_adec_reset(e.adec);
             pidvd_spu_clear(e.spu);
-            e.vpts0 = -1;
+            reset_stream_epoch(&e);
             break;
         case DVDNAV_AUDIO_STREAM_CHANGE: {
             dvdnav_audio_stream_change_event_t *ev = (void *)blk;
@@ -466,6 +680,7 @@ int pidvd_nav_play(const char *iso_path)
             if (phys >= 0 && (phys & 7) != e.cur_audio) {
                 e.cur_audio = phys & 7;
                 pidvd_adec_reset(e.adec);
+                reset_audio_stream(&e);
             }
             break;
         }
@@ -484,8 +699,10 @@ int pidvd_nav_play(const char *iso_path)
     fprintf(stderr, "nav: stopped after %ld frames\n", e.frames);
     pthread_mutex_lock(&e.a_lock);
     e.a_run = false;
-    pthread_cond_broadcast(&e.a_cond);
+    pthread_cond_broadcast(&e.a_not_empty);
+    pthread_cond_broadcast(&e.a_not_full);
     pthread_mutex_unlock(&e.a_lock);
+    pidvd_av_sync_audio_ready(e.sync, e.epoch, false);
     pthread_join(e.audio_thread, NULL);
     pidvd_adec_free(e.adec);
     pidvd_input_close(e.input);
@@ -493,6 +710,7 @@ int pidvd_nav_play(const char *iso_path)
     (void)shown;
     pidvd_vdec_free(e.vdec);
     pidvd_spu_free(e.spu);
+    pidvd_av_sync_free(e.sync);
     pidvd_video_close(e.video);
     free(e.fy);
     free(e.fu);

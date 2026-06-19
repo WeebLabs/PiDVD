@@ -16,21 +16,29 @@ struct ring_frame {
     uint8_t *y, *u, *v;
     int width, height;
     bool tff, rff;
+    int64_t pts;
+    uint64_t epoch;
 };
 
 struct pidvd_presenter {
     pidvd_video_t *video;
     pidvd_blend_cb blend;
     void *blend_ctx;
+    pidvd_prepare_cb prepare;
+    pidvd_presented_cb presented;
+    void *timing_ctx;
+    uint64_t displayed_epoch;
+    bool have_displayed_epoch;
     struct ring_frame ring[RING_DEPTH];
     int max_w, max_h;
     int head, tail, count;     /* guarded by lock */
+    bool busy;
     bool running;
     long frames;
     uint8_t *rgb;              /* cached convert+blend buffer */
     pthread_t thread;
     pthread_mutex_t lock;
-    pthread_cond_t not_full, not_empty;
+    pthread_cond_t not_full, not_empty, idle;
 };
 
 static inline uint8_t clamp8(int v)
@@ -133,7 +141,12 @@ static void *present_loop(void *opaque)
             return NULL;
         }
         struct ring_frame *fr = &p->ring[p->tail];
+        p->busy = true;
         pthread_mutex_unlock(&p->lock);
+
+        if ((!p->have_displayed_epoch || fr->epoch != p->displayed_epoch)
+            && p->prepare)
+            p->prepare(p->timing_ctx, fr->epoch);
 
         yuv_to_rgb(fr, p->rgb);
         if (p->blend)
@@ -145,31 +158,48 @@ static void *present_loop(void *opaque)
         for (int y = 0; y < rows; y++)
             memcpy(f->pixels + (size_t)y * f->stride,
                    p->rgb + (size_t)y * fr->width * 4, line);
-        pidvd_video_present(p->video, f, fr->tff, fr->rff);
+        pidvd_video_stamp_t stamp;
+        bool shown = pidvd_video_present(p->video, f, fr->tff, fr->rff,
+                                         &stamp);
+        if (shown && p->presented)
+            p->presented(p->timing_ctx, fr->epoch, fr->pts, &stamp);
 
         pthread_mutex_lock(&p->lock);
-        p->tail = (p->tail + 1) % RING_DEPTH;
-        p->count--;
-        p->frames++;
-        pthread_cond_signal(&p->not_full);
+        p->busy = false;
+        pthread_cond_broadcast(&p->idle);
+        if (shown) {
+            p->displayed_epoch = fr->epoch;
+            p->have_displayed_epoch = true;
+            p->tail = (p->tail + 1) % RING_DEPTH;
+            p->count--;
+            p->frames++;
+            pthread_cond_signal(&p->not_full);
+        }
         pthread_mutex_unlock(&p->lock);
     }
 }
 
 pidvd_presenter_t *pidvd_presenter_start(pidvd_video_t *video,
                                          int width, int height,
-                                         pidvd_blend_cb blend, void *ctx)
+                                         pidvd_blend_cb blend, void *ctx,
+                                         pidvd_prepare_cb prepare,
+                                         pidvd_presented_cb presented,
+                                         void *timing_ctx)
 {
     pidvd_presenter_t *p = calloc(1, sizeof(*p));
     p->video = video;
     p->blend = blend;
     p->blend_ctx = ctx;
+    p->prepare = prepare;
+    p->presented = presented;
+    p->timing_ctx = timing_ctx;
     p->max_w = width;
     p->max_h = height;
     p->running = true;
     pthread_mutex_init(&p->lock, NULL);
     pthread_cond_init(&p->not_full, NULL);
     pthread_cond_init(&p->not_empty, NULL);
+    pthread_cond_init(&p->idle, NULL);
     size_t luma = (size_t)width * height;
     for (int i = 0; i < RING_DEPTH; i++) {
         p->ring[i].y = malloc(luma);
@@ -187,7 +217,7 @@ pidvd_presenter_t *pidvd_presenter_start(pidvd_video_t *video,
 void pidvd_presenter_push(pidvd_presenter_t *p,
                           const uint8_t *y, const uint8_t *u,
                           const uint8_t *v, int width, int height,
-                          bool tff, bool rff)
+                          bool tff, bool rff, int64_t pts, uint64_t epoch)
 {
     if (width > p->max_w) width = p->max_w;
     if (height > p->max_h) height = p->max_h;
@@ -199,12 +229,24 @@ void pidvd_presenter_push(pidvd_presenter_t *p,
     fr->height = height;
     fr->tff = tff;
     fr->rff = rff;
+    fr->pts = pts;
+    fr->epoch = epoch;
     memcpy(fr->y, y, (size_t)width * height);
     memcpy(fr->u, u, (size_t)width * height / 4);
     memcpy(fr->v, v, (size_t)width * height / 4);
     p->head = (p->head + 1) % RING_DEPTH;
     p->count++;
     pthread_cond_signal(&p->not_empty);
+    pthread_mutex_unlock(&p->lock);
+}
+
+void pidvd_presenter_reset(pidvd_presenter_t *p)
+{
+    pthread_mutex_lock(&p->lock);
+    while (p->busy)
+        pthread_cond_wait(&p->idle, &p->lock);
+    p->head = p->tail = p->count = 0;
+    pthread_cond_broadcast(&p->not_full);
     pthread_mutex_unlock(&p->lock);
 }
 

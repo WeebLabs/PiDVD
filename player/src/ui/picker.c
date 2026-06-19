@@ -77,7 +77,7 @@ static void present(vout_t *vo, const ui_view_t *view)
         return;
     ui_canvas_t c = { f->pixels, f->width, f->height, f->stride };
     pidvd_ui_render(&c, view);
-    pidvd_video_present(vo->video, f, true, false);
+    pidvd_video_present(vo->video, f, true, false, NULL);
 }
 
 int pidvd_picker_main(ui_settings_t *set, const char *now_playing,

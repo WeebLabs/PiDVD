@@ -22,6 +22,11 @@ typedef struct {
     int      stride;
 } pidvd_frame_t;
 
+typedef struct {
+    uint64_t sequence;      /* DRM vblank/page-flip sequence */
+    int64_t monotonic_ns;   /* physical latch time */
+} pidvd_video_stamp_t;
+
 /* Scan: playback is always interlaced (the disc's native field cadence).
  * The picker may request progressive — 240p (NTSC) / 288p (PAL) — for a
  * rock-steady, flicker-free menu. In progressive mode the caller still
@@ -44,9 +49,9 @@ bool pidvd_video_set_mode(pidvd_video_t *v, pidvd_standard_t std,
 /* Acquire the next back buffer to decode into. */
 pidvd_frame_t *pidvd_video_begin_frame(pidvd_video_t *v);
 /* Queue the frame; tff/rff come from the MPEG-2 picture flags and drive
- * field order and 3:2 cadence. Blocks per vsync pacing. */
+ * field order and 3:2 cadence. Blocks per vsync pacing. stamp may be NULL. */
 bool pidvd_video_present(pidvd_video_t *v, pidvd_frame_t *f,
-                         bool tff, bool rff);
+                         bool tff, bool rff, pidvd_video_stamp_t *stamp);
 void pidvd_video_close(pidvd_video_t *v);
 /* diagnostic: print N successive vblank wait sequences/timings */
 void pidvd_video_vblprobe(pidvd_video_t *v, int n);
@@ -72,9 +77,16 @@ typedef enum {
 
 pidvd_audio_t *pidvd_audio_open(pidvd_audio_mode_t mode, int sample_rate);
 int  pidvd_audio_write(pidvd_audio_t *a, const void *data, int frames);
-/* Monotonic playback position in samples — the master A/V clock. */
-int64_t pidvd_audio_position(pidvd_audio_t *a);
+/* Start explicitly after prebuffering; writes never auto-start the device. */
+bool pidvd_audio_start(pidvd_audio_t *a);
+typedef struct {
+    int64_t played_frames;
+    int64_t monotonic_ns;
+} pidvd_audio_status_t;
+bool pidvd_audio_status(pidvd_audio_t *a, pidvd_audio_status_t *status);
+/* Drain at a normal end; abort discards queued samples at a discontinuity. */
 void pidvd_audio_close(pidvd_audio_t *a);
+void pidvd_audio_abort(pidvd_audio_t *a);
 
 /* ---- input ------------------------------------------------------------
  * All devices (USB keyboard, 2.4 GHz HID remotes, gpio-ir) normalize to

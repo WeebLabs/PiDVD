@@ -34,18 +34,19 @@ src/nav/        libdvdnav integration: DVD VM, menus, NAV packet (PCI/DSI),
 src/demux/      MPEG-PS demux of VOB sectors handed out by dvdnav
 src/decode/     video (libmpeg2), audio (a52dec / MP2 / LPCM), SPU (custom
                 RLE sub-picture decoder for subtitles + menu highlights)
-src/present/    A/V clock, field scheduler: maps decoded fields to output
-                fields by PTS, honors TFF/RFF, drives vsync-paced flips
+src/present/    immutable field scheduler: honors TFF/RFF and drives
+                vsync-paced flips without sync-driven drops or repeats
+src/sync/       display-master clock, PCM timeline, PI servo and SpeexDSP
+                adaptive resampling
 src/platform/   thin interfaces: video_out, audio_out, input, storage
 platform/linux/ KMS/DRM atomic implementation, ALSA (USB S/PDIF), evdev
 ```
 
 ### Threading (4× Cortex-A53)
 
-- core 0: nav/demux + UI
-- core 1: MPEG-2 video decode
-- core 2: audio decode + SPU
-- core 3: presenter (field pacing, page flips)
+- cores 0–1: nav/demux, MPEG-2 + AC-3 decode, SPU
+- core 2: adaptive PCM resampling + ALSA output
+- core 3: presenter (conversion, field pacing, page flips)
 
 ## Video output
 
@@ -67,11 +68,18 @@ platform/linux/ KMS/DRM atomic implementation, ALSA (USB S/PDIF), evdev
 
 ## Audio
 
-- AC-3: decode+downmix to stereo PCM, or IEC 61937 passthrough (config)
+- AC-3: decode+downmix to stereo PCM
 - MP2, LPCM: decode to PCM
 - Output: ALSA → USB S/PDIF. Optional build: stereo downmix to the 3.5 mm
   jack (PWM) for SCART TV speakers via the UMSA.
-- A/V sync: audio clock is master; video fields scheduled against it.
+- A/V sync: the physical DRM/vblank timeline is master. Video cadence is
+  immutable; a bounded, slew-limited PI servo continuously resamples decoded
+  PCM to follow the display clock. Seeks, branches, VTS changes and stream
+  changes flush and re-prime the audio timeline rather than carrying stale
+  samples across a PTS epoch.
+- IEC 61937 passthrough cannot use continuous resampling and is therefore
+  incompatible with cadence-perfect display synchronization unless audio and
+  video share a hardware clock.
 
 ## UX
 

@@ -12,7 +12,7 @@ enum { UI_SET_THEME, UI_SET_LAYOUT, UI_SET_AUDIO,
 typedef struct {
     int theme;        /* index into pidvd_themes */
     int layout;       /* 0 console, 1 marquee, 2 ledger */
-    int audio_out;    /* 0 stereo downmix, 1 AC-3 passthrough */
+    int audio_out;    /* reserved; display-synchronized PCM is mandatory */
     int attract_dim;  /* 0 off, 1 5min, 2 15min, 3 30min */
     int comp_filter;  /* 0 off..8: menu composite horizontal low-pass strength */
     /* The menu is always 240p NTSC; the disc's own standard drives

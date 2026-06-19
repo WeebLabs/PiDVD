@@ -4,5 +4,6 @@ config BR2_PACKAGE_PIDVD_PLAYER
 	select BR2_PACKAGE_LIBDVDNAV
 	select BR2_PACKAGE_LIBDRM
 	select BR2_PACKAGE_ALSA_LIB
+	select BR2_PACKAGE_SPEEXDSP
 	help
 	  PiDVD field-accurate DVD player (this repository's player/ tree).

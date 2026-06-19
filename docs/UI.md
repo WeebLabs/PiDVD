@@ -289,7 +289,7 @@ from ATTRACT. Same chrome as BROWSE; one centered panel:
 
    THEME             ◂ AMBER & ICE ▸
    LAYOUT            ◂ CONSOLE ▸
-   AUDIO OUTPUT      ◂ STEREO DOWNMIX ▸
+   AUDIO OUTPUT      ◂ DISPLAY-SYNC PCM ▸
    ATTRACT DIM       ◂ AFTER 15 MIN ▸
    RESCAN CATALOG    ⏎
 
@@ -303,7 +303,7 @@ from ATTRACT. Same chrome as BROWSE; one centered panel:
   flipping themes/layouts live on the CRT is half the fun. ENTER fires
   action rows (rescan). MENU or STOP exits.
 - Values: THEME (§2 four), LAYOUT (CONSOLE/MARQUEE/LEDGER), AUDIO OUTPUT
-  (STEREO DOWNMIX / AC-3 PASSTHROUGH), ATTRACT DIM (OFF / 5 / 15 / 30 MIN —
+  (DISPLAY-SYNC PCM), ATTRACT DIM (OFF / 5 / 15 / 30 MIN —
   blanks to the drifting logo bug, CRT burn-in kindness). There is *no*
   menu-mode setting: the menu is always 240p NTSC (§1).
 - **Persistence**: `pidvd.cfg` (`key=value`) on the SD boot partition —
