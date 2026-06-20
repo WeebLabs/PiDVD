@@ -175,6 +175,19 @@ int main(int argc, char **argv)
     pidvd_ui_render(&c, &v);
     snprintf(path, sizeof(path), "%s/saver-warp-terminal.ppm", out);
     write_ppm(path, px);
+
+    /* DVD bounce — a couple of ticks so the logo lands somewhere visible */
+    set.saver = PIDVD_SAVER_DVD;
+    set.theme = 0;
+    v.tick = 90;
+    pidvd_ui_render(&c, &v);
+    snprintf(path, sizeof(path), "%s/saver-dvd-amber-ice.ppm", out);
+    write_ppm(path, px);
+    set.theme = 3;  /* midnight blue */
+    v.tick = 300;
+    pidvd_ui_render(&c, &v);
+    snprintf(path, sizeof(path), "%s/saver-dvd-midnight.ppm", out);
+    write_ppm(path, px);
     v.saver_active = false;
 
     printf("wrote previews to %s/\n", out);

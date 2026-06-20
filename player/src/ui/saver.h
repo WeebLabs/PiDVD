@@ -11,8 +11,9 @@
 #include "ui/render.h"   /* ui_theme_t  */
 
 /* Screensaver kinds. The values are the SCREENSAVER setting's indices
- * (settings.c saver_v[]), so 0/1 here must match OFF/WARP STARFIELD there. */
-enum { PIDVD_SAVER_OFF = 0, PIDVD_SAVER_WARP = 1 };
+ * (settings.c saver_v[]), so these must match OFF / WARP STARFIELD / DVD
+ * LOGO there. */
+enum { PIDVD_SAVER_OFF = 0, PIDVD_SAVER_WARP = 1, PIDVD_SAVER_DVD = 2 };
 
 /* How long the picker must see no input before the screensaver arms, in
  * real seconds. Deliberately a code-side knob (you asked for the timing to
