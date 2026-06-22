@@ -9,6 +9,11 @@
 #define PTS_WRAP (INT64_C(1) << 33)
 #define MAX_CORRECTION_PPM 3000
 #define MAX_SLEW_PPM 60
+/* A presented-PTS jump beyond this (either direction) is a real timeline
+ * discontinuity — menu<->title, chapter skip, a "Play All" episode boundary —
+ * not frame jitter or a held still, so the clock re-anchors instead of
+ * extrapolating the old timeline. 1 s; normal playback never steps this far. */
+#define PTS_DISCONTINUITY INT64_C(90000)
 
 enum audio_state {
     AUDIO_PENDING,
@@ -188,13 +193,26 @@ void pidvd_av_sync_video_presented(pidvd_av_sync_t *s, uint64_t epoch,
     if (pts >= 0) {
         int64_t value = s->display_valid
             ? unwrap_near(pts, s->display_pts) : pts;
-        if (s->display_valid && value <= s->display_pts) {
+        int64_t gap = s->display_valid ? value - s->display_pts : 0;
+        if (s->display_valid
+            && (gap > PTS_DISCONTINUITY || gap < -PTS_DISCONTINUITY)) {
+            /* Timeline discontinuity: jump the clock to the new PTS and drop
+             * the servo windup so audio re-locks rather than the rate loop
+             * railing for minutes against a phantom error. */
+            s->display_pts = value;
+            s->servo_valid = false;
+            s->filtered_error = 0;
+            s->integral_error = 0;
+            s->correction_ppm = 0;
+        } else if (s->display_valid && gap <= 0) {
+            /* Small backward step or a re-pushed still: hold, advancing the
+             * clock at real time so it never runs backward. */
             int64_t elapsed = monotonic_ns - s->display_ns;
             if (elapsed > 0)
-                value = s->display_pts
-                      + (int64_t)(elapsed * (PTS_HZ / 1000000000.0));
+                s->display_pts += (int64_t)(elapsed * (PTS_HZ / 1000000000.0));
+        } else {
+            s->display_pts = value;   /* normal forward advance / first frame */
         }
-        s->display_pts = value;
         s->display_ns = monotonic_ns;
         s->display_valid = true;
     } else if (s->display_valid) {
