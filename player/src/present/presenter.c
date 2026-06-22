@@ -3,6 +3,7 @@
 
 #include <pthread.h>
 #include <sched.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -11,6 +12,34 @@
 #endif
 
 #define RING_DEPTH 8
+
+/* Live presentation stats, published once a second for the web remote to poll:
+ * the current frame rate and the "1% low" — the frame rate at the 99th
+ * percentile frame interval over the last 10 s, i.e. how bad the worst stutters
+ * are. Written "<fps> <low>\n" via temp+rename so a reader never sees a partial
+ * value. */
+#define STAT_PATH "/tmp/pidvd-stat"
+#define FPS_WINDOW_NS  INT64_C(10000000000) /* 1% low look-back: 10 s */
+#define FPS_RING       512                  /* >10 s of frames at any rate */
+#define FPS_GAP_NS     INT64_C(1000000000)  /* >1 s between frames = a pause */
+
+struct fps_sample { int64_t t_ns, dt_ns; };
+
+static void write_fps_stat(double fps, double low)
+{
+    FILE *f = fopen(STAT_PATH ".tmp", "w");
+    if (!f)
+        return;
+    fprintf(f, "%.1f %.1f\n", fps, low);
+    fclose(f);
+    rename(STAT_PATH ".tmp", STAT_PATH);
+}
+
+static int cmp_i64(const void *a, const void *b)
+{
+    int64_t x = *(const int64_t *)a, y = *(const int64_t *)b;
+    return (x > y) - (x < y);
+}
 
 struct ring_frame {
     uint8_t *y, *u, *v;
@@ -35,6 +64,11 @@ struct pidvd_presenter {
     bool busy;
     bool running;
     long frames;
+    /* presenter-thread only: live fps + 1% low bookkeeping */
+    int64_t fps_pub_ns;        /* last time stats were published */
+    int64_t fps_prev_ns;       /* previous frame's present time */
+    struct fps_sample fps_ring[FPS_RING];
+    int fps_head, fps_count;
     uint8_t *rgb;              /* cached convert+blend buffer */
     pthread_t thread;
     pthread_mutex_t lock;
@@ -119,6 +153,54 @@ static void yuv_to_rgb(const struct ring_frame *f, uint8_t *dst)
     }
 }
 
+/* Recompute and publish current fps + 1% low from the rolling sample ring. */
+static void publish_fps(pidvd_presenter_t *p, int64_t now_ns)
+{
+    int64_t dts[FPS_RING];
+    int n10 = 0, n1 = 0;
+    int64_t sum1 = 0;
+    for (int i = 0; i < p->fps_count; i++) {
+        int idx = (p->fps_head - 1 - i + 2 * FPS_RING) % FPS_RING;
+        const struct fps_sample *s = &p->fps_ring[idx];
+        if (now_ns - s->t_ns > FPS_WINDOW_NS)
+            break;                 /* time-ordered: every older sample too */
+        dts[n10++] = s->dt_ns;
+        if (now_ns - s->t_ns <= INT64_C(1000000000)) {
+            n1++;
+            sum1 += s->dt_ns;
+        }
+    }
+    double fps = (n1 > 0 && sum1 > 0) ? (double)n1 * 1e9 / (double)sum1 : 0.0;
+    double low = 0.0;
+    if (n10 > 0) {
+        /* 1% low = fps at the 99th-percentile (worst) frame interval. */
+        qsort(dts, (size_t)n10, sizeof(dts[0]), cmp_i64);
+        int64_t p99 = dts[(int)(0.99 * (n10 - 1))];
+        if (p99 > 0)
+            low = 1e9 / (double)p99;
+    }
+    write_fps_stat(fps, low);
+}
+
+/* Called once per shown frame with its physical present time. */
+static void record_present(pidvd_presenter_t *p, int64_t now_ns)
+{
+    int64_t dt = now_ns - p->fps_prev_ns;
+    /* Skip the first frame and any post-pause gap, so a still or menu wait is
+     * not counted as one enormous-frametime stutter. */
+    if (p->fps_prev_ns > 0 && dt > 0 && dt < FPS_GAP_NS) {
+        p->fps_ring[p->fps_head] = (struct fps_sample){ now_ns, dt };
+        p->fps_head = (p->fps_head + 1) % FPS_RING;
+        if (p->fps_count < FPS_RING)
+            p->fps_count++;
+    }
+    p->fps_prev_ns = now_ns;
+    if (now_ns - p->fps_pub_ns >= INT64_C(1000000000)) {
+        p->fps_pub_ns = now_ns;
+        publish_fps(p, now_ns);
+    }
+}
+
 static void *present_loop(void *opaque)
 {
     pidvd_presenter_t *p = opaque;
@@ -138,6 +220,7 @@ static void *present_loop(void *opaque)
             pthread_cond_wait(&p->not_empty, &p->lock);
         if (p->count == 0 && !p->running) {
             pthread_mutex_unlock(&p->lock);
+            write_fps_stat(0.0, 0.0);   /* playback ended: remote shows idle */
             return NULL;
         }
         struct ring_frame *fr = &p->ring[p->tail];
@@ -176,6 +259,9 @@ static void *present_loop(void *opaque)
             pthread_cond_signal(&p->not_full);
         }
         pthread_mutex_unlock(&p->lock);
+
+        if (shown && stamp.monotonic_ns > 0)
+            record_present(p, stamp.monotonic_ns);
     }
 }
 
