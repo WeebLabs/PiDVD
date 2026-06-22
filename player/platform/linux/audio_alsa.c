@@ -20,11 +20,48 @@ struct pidvd_audio {
     bool started;
 };
 
-/* Pick the output device: prefer the first USB-Audio card, else the bcm2835
- * PWM jack; never the HDMI audio. Writes "plughw:<card>,0" into dev (plug wraps
- * the card so any S16/rate the DAC wants is handled). Falls back to "default"
- * if card enumeration turns up nothing usable. */
-static void select_audio_device(char *dev, size_t cap)
+/* Player-selected output: dev id "" / "AUTO" auto-picks, else forces a card.
+ * volume <0 leaves the card mixer untouched. Set via pidvd_audio_configure(). */
+static char g_dev_id[20] = "";
+static int  g_volume = -1;
+
+static const char *card_kind(const char *drv)
+{
+    if (!drv) return "";
+    if (strstr(drv, "USB")) return "USB";
+    if (strstr(drv, "bcm2835")) return "PWM";
+    if (strstr(drv, "vc4")) return "HDMI";
+    return "";
+}
+
+/* First card whose ALSA id == want, or -1. */
+static int card_for_id(const char *want)
+{
+    if (!want || !want[0])
+        return -1;
+    int card = -1;
+    while (snd_card_next(&card) == 0 && card >= 0) {
+        char hw[16];
+        snprintf(hw, sizeof(hw), "hw:%d", card);
+        snd_ctl_t *ctl;
+        if (snd_ctl_open(&ctl, hw, 0) < 0)
+            continue;
+        snd_ctl_card_info_t *info;
+        snd_ctl_card_info_alloca(&info);
+        int hit = 0;
+        if (snd_ctl_card_info(ctl, info) == 0) {
+            const char *id = snd_ctl_card_info_get_id(info);
+            hit = id && !strcmp(id, want);
+        }
+        snd_ctl_close(ctl);
+        if (hit)
+            return card;
+    }
+    return -1;
+}
+
+/* Auto pick: first USB-Audio card, else bcm2835 PWM, never HDMI. -1 if none. */
+static int auto_card(void)
 {
     int usb = -1, pwm = -1, card = -1;
     while (snd_card_next(&card) == 0 && card >= 0) {
@@ -38,23 +75,121 @@ static void select_audio_device(char *dev, size_t cap)
         if (snd_ctl_card_info(ctl, info) == 0) {
             const char *drv = snd_ctl_card_info_get_driver(info);
             if (drv && strstr(drv, "USB")) {
-                if (usb < 0)
-                    usb = card;
+                if (usb < 0) usb = card;
             } else if (drv && strstr(drv, "bcm2835")) {
-                if (pwm < 0)
-                    pwm = card;
+                if (pwm < 0) pwm = card;
             }
-            /* vc4-hdmi (and anything else) is deliberately skipped. */
         }
         snd_ctl_close(ctl);
     }
-    int sel = usb >= 0 ? usb : pwm;
-    if (sel < 0)
-        snprintf(dev, cap, "default");
-    else
-        snprintf(dev, cap, "plughw:%d,0", sel);
-    fprintf(stderr, "audio: output device %s (%s)\n", dev,
-            usb >= 0 ? "USB" : sel >= 0 ? "PWM fallback" : "ALSA default");
+    return usb >= 0 ? usb : pwm;
+}
+
+/* Resolve a selection (id, or AUTO/"") to a card index. */
+static int resolve_card(const char *dev_id)
+{
+    if (dev_id && dev_id[0] && strcmp(dev_id, "AUTO") != 0) {
+        int c = card_for_id(dev_id);
+        if (c >= 0)
+            return c;   /* configured card present */
+    }
+    return auto_card();  /* AUTO, or configured card vanished */
+}
+
+int pidvd_audio_list(pidvd_audio_dev_t *out, int max)
+{
+    int n = 0, card = -1;
+    while (n < max && snd_card_next(&card) == 0 && card >= 0) {
+        char hw[16];
+        snprintf(hw, sizeof(hw), "hw:%d", card);
+        snd_ctl_t *ctl;
+        if (snd_ctl_open(&ctl, hw, 0) < 0)
+            continue;
+        snd_ctl_card_info_t *info;
+        snd_ctl_card_info_alloca(&info);
+        if (snd_ctl_card_info(ctl, info) == 0) {
+            const char *id = snd_ctl_card_info_get_id(info);
+            const char *nm = snd_ctl_card_info_get_name(info);
+            const char *kind = card_kind(snd_ctl_card_info_get_driver(info));
+            snprintf(out[n].id, sizeof(out[n].id), "%s", id ? id : "");
+            snprintf(out[n].label, sizeof(out[n].label), "%s%s%s",
+                     kind, kind[0] ? " " : "", nm ? nm : (id ? id : "?"));
+            n++;
+        }
+        snd_ctl_close(ctl);
+    }
+    return n;
+}
+
+void pidvd_audio_configure(const char *dev_id, int volume)
+{
+    snprintf(g_dev_id, sizeof(g_dev_id), "%s", dev_id ? dev_id : "");
+    g_volume = volume;
+}
+
+/* The card's first playback-volume mixer element, or NULL. */
+static snd_mixer_elem_t *find_vol_elem(snd_mixer_t *mix)
+{
+    for (snd_mixer_elem_t *e = snd_mixer_first_elem(mix); e;
+         e = snd_mixer_elem_next(e))
+        if (snd_mixer_selem_is_active(e)
+            && snd_mixer_selem_has_playback_volume(e))
+            return e;
+    return NULL;
+}
+
+/* Set a card's playback volume to a 0..100 percentage (rounded to nearest).
+ * Volume is treated as a single preference applied TO the active card; the
+ * mixer is never read back into settings, so there is no round-trip drift. */
+static bool card_set_volume(int card, int pct)
+{
+    if (card < 0)
+        return false;
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    char hw[16];
+    snprintf(hw, sizeof(hw), "hw:%d", card);
+    snd_mixer_t *mix;
+    if (snd_mixer_open(&mix, 0) < 0)
+        return false;
+    bool ok = false;
+    if (snd_mixer_attach(mix, hw) == 0
+        && snd_mixer_selem_register(mix, NULL, NULL) == 0
+        && snd_mixer_load(mix) == 0) {
+        snd_mixer_elem_t *e = find_vol_elem(mix);
+        long mn = 0, mx = 0;
+        if (e && snd_mixer_selem_get_playback_volume_range(e, &mn, &mx) == 0
+            && mx > mn) {
+            long v = mn + ((mx - mn) * pct + 50) / 100;   /* round to nearest */
+            if (snd_mixer_selem_set_playback_volume_all(e, v) == 0)
+                ok = true;
+            if (snd_mixer_selem_has_playback_switch(e))
+                snd_mixer_selem_set_playback_switch_all(e, pct > 0);
+        }
+    }
+    snd_mixer_close(mix);
+    return ok;
+}
+
+bool pidvd_audio_set_volume(const char *dev_id, int volume)
+{
+    return card_set_volume(resolve_card(dev_id), volume);
+}
+
+int pidvd_audio_adjust_volume(int delta)
+{
+    int base = g_volume < 0 ? 100 : g_volume;
+    base += delta;
+    if (base < 0) base = 0;
+    if (base > 100) base = 100;
+    g_volume = base;
+    card_set_volume(resolve_card(g_dev_id), g_volume);
+    return g_volume;
+}
+
+int pidvd_audio_volume(void)
+{
+    return g_volume;
 }
 
 pidvd_audio_t *pidvd_audio_open(pidvd_audio_mode_t mode, int sample_rate)
@@ -62,13 +197,22 @@ pidvd_audio_t *pidvd_audio_open(pidvd_audio_mode_t mode, int sample_rate)
     if (mode != PIDVD_AUDIO_PCM_STEREO)
         return NULL;   /* IEC61937 passthrough: later */
     pidvd_audio_t *a = calloc(1, sizeof(*a));
+    if (!a)
+        return NULL;
+    int card = resolve_card(g_dev_id);
     char dev[24];
-    select_audio_device(dev, sizeof(dev));
+    if (card < 0)
+        snprintf(dev, sizeof(dev), "default");
+    else
+        snprintf(dev, sizeof(dev), "plughw:%d,0", card);
+    fprintf(stderr, "audio: output device %s\n", dev);
     if (snd_pcm_open(&a->pcm, dev, SND_PCM_STREAM_PLAYBACK, 0) < 0) {
         fprintf(stderr, "audio: cannot open ALSA device %s\n", dev);
         free(a);
         return NULL;
     }
+    if (g_volume >= 0)
+        card_set_volume(card, g_volume);  /* apply the configured level */
     if (snd_pcm_set_params(a->pcm, SND_PCM_FORMAT_S16_LE,
                            SND_PCM_ACCESS_RW_INTERLEAVED, 2, sample_rate,
                            1, 350000 /* ~µs: deep enough to absorb the startup

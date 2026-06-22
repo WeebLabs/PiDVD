@@ -97,6 +97,24 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
     view.source = "USB";
     view.now_playing = now_playing;
 
+    /* Refresh the selectable audio outputs each time the menu opens, so a DAC
+     * plugged in between sessions appears. Index 0 is always AUTO. */
+    pidvd_audio_dev_t devs[UI_AUDIO_DEV_MAX - 1];
+    int nd = pidvd_audio_list(devs, UI_AUDIO_DEV_MAX - 1);
+    set->dev_id[0][0] = 0;
+    snprintf(set->dev_label[0], sizeof(set->dev_label[0]), "AUTO");
+    set->n_dev = 1;
+    for (int i = 0; i < nd && set->n_dev < UI_AUDIO_DEV_MAX; i++, set->n_dev++) {
+        snprintf(set->dev_id[set->n_dev], sizeof(set->dev_id[0]),
+                 "%s", devs[i].id);
+        snprintf(set->dev_label[set->n_dev], sizeof(set->dev_label[0]),
+                 "%s", devs[i].label);
+    }
+    ui_settings_resolve_dev(set);
+    /* Push the saved volume to the active card so the displayed % matches the
+     * hardware (same "config wins" rule playback uses). */
+    pidvd_audio_set_volume(set->audio_dev, set->volume);
+
     catalog_t *cat = NULL;
     bool autoplay_armed = (now_playing == NULL);
     int result = -1;
@@ -159,6 +177,14 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
             }
             /* COMP FILTER applies live on the CRT as it's cycled. */
             pidvd_video_set_hfilter(vo.video, (unsigned)set->comp_filter);
+            /* VOLUME is a single preference applied to the active card. Pushing
+             * it on a volume change (live) or a device change (so the newly
+             * selected card adopts it) keeps hardware and the displayed % in
+             * step without ever reading the mixer back into the setting. */
+            if ((k == PIDVD_KEY_LEFT || k == PIDVD_KEY_RIGHT
+                 || k == PIDVD_KEY_ENTER)
+                && (view.set_sel == UI_SET_VOL || view.set_sel == UI_SET_ADEV))
+                pidvd_audio_set_volume(set->audio_dev, set->volume);
         } else if (view.screen == UI_BROWSE && cat) {
             catalog_lock(cat);
             int n = catalog_count(cat);

@@ -66,7 +66,10 @@ static int ui_main(void)
 
         display_name(iso, now_buf, sizeof(now_buf));
         printf("pidvd: playing %s\n", iso);
+        pidvd_audio_configure(set.audio_dev, set.volume);
         pidvd_nav_play(iso);
+        set.volume = pidvd_audio_volume();   /* keep a live in-playback change */
+        ui_settings_save(&set);
         now_name = now_buf;
     }
 }

@@ -36,7 +36,8 @@
  * remote can write nothing else — this list is the whole attack surface. */
 static const char *const KEYS[] = {
     "up",   "down", "left",  "right", "enter", "menu",  "title",
-    "pause", "stop", "next", "prev",  "audio", "sub",   NULL,
+    "pause", "stop", "next", "prev",  "audio", "sub",
+    "volup", "voldown", NULL,
 };
 
 static const char *fifo_path = DEFAULT_FIFO;
@@ -127,6 +128,10 @@ static const char PAGE[] =
 "<div class=row>"
 "<button class=wide data-k=audio>AUDIO</button>"
 "<button class=wide data-k=sub>SUB</button>"
+"</div>"
+"<div class=row>"
+"<button class=wide data-k=voldown>VOL \xe2\x88\x92</button>"
+"<button class=wide data-k=volup>VOL +</button>"
 "</div>"
 "<div class=st id=st>&nbsp;</div>"
 "<script>"

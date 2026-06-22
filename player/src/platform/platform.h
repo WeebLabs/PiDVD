@@ -75,6 +75,29 @@ typedef enum {
     PIDVD_AUDIO_IEC61937_AC3, /* raw AC-3 passthrough over S/PDIF */
 } pidvd_audio_mode_t;
 
+/* Output-device selection + volume. The engine never passes a device down the
+ * chain; instead the player calls pidvd_audio_configure() once (from the menu /
+ * before playback) and pidvd_audio_open() honors it: dev_id "" or "AUTO" picks
+ * a USB card, else the bcm2835 PWM, never HDMI; a real card id forces that card.
+ * volume is 0..100 applied to the card's mixer, or <0 to leave it untouched. */
+typedef struct {
+    char id[20];     /* ALSA card id, e.g. "DSPi" */
+    char label[28];  /* human label for the menu */
+} pidvd_audio_dev_t;
+
+/* List selectable output cards (every card, including HDMI). Returns count. */
+int  pidvd_audio_list(pidvd_audio_dev_t *out, int max);
+void pidvd_audio_configure(const char *dev_id, int volume);
+/* Apply the mixer volume (0..100) to the card dev_id resolves to. Volume is a
+ * single preference applied to the active card; the mixer is never read back. */
+bool pidvd_audio_set_volume(const char *dev_id, int volume);
+/* Nudge the configured volume by delta (e.g. ±5) on the active card and return
+ * the new 0..100 level — used to change volume live during playback. */
+int  pidvd_audio_adjust_volume(int delta);
+/* The current configured volume (0..100), so the player can persist a live
+ * change made during playback. */
+int  pidvd_audio_volume(void);
+
 pidvd_audio_t *pidvd_audio_open(pidvd_audio_mode_t mode, int sample_rate);
 int  pidvd_audio_write(pidvd_audio_t *a, const void *data, int frames);
 /* Start explicitly after prebuffering; writes never auto-start the device. */
@@ -99,6 +122,7 @@ typedef enum {
     PIDVD_KEY_PREV_CHAPTER, PIDVD_KEY_NEXT_CHAPTER,
     PIDVD_KEY_AUDIO, PIDVD_KEY_SUBTITLE, PIDVD_KEY_ANGLE,
     PIDVD_KEY_FIELD,   /* invert output field dominance (menu judder fix) */
+    PIDVD_KEY_VOL_UP, PIDVD_KEY_VOL_DOWN, /* live output volume during playback */
 } pidvd_key_t;
 
 typedef struct pidvd_input pidvd_input_t;

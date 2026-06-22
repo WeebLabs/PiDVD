@@ -20,6 +20,7 @@
 #include "present/presenter.h"
 #include "sync/audio_playback.h"
 #include "sync/av_sync.h"
+#include "ui/draw.h"
 
 #define FRAME_W 720
 #define FRAME_H 576
@@ -70,6 +71,8 @@ struct engine {
     pthread_mutex_t spu_lock;   /* spu state vs presenter blend thread */
     bool tff, rff;
     int64_t pts;            /* last decoded frame's pts, forwarded to presenter */
+    int osd_vol;            /* volume % to show; osd_ticks frames remaining */
+    int osd_ticks;          /* presenter-thread countdown (lock-free, benign) */
     long frames;
     /* producer timing */
     double t_prev, t_acc, t_max;
@@ -78,6 +81,27 @@ struct engine {
 };
 
 /* ---- compositing (presenter thread) ----------------------------------- */
+
+/* Frames a volume change stays on screen (~1.5 s at the field-paced rate). */
+#define OSD_FRAMES 48
+
+/* Transient "VOL nn%" chip, top-right. sy even keeps every edge interlace-safe
+ * (draw.h interlace law); drawn straight into the XRGB frame the presenter is
+ * about to scan out. */
+static void draw_volume_osd(uint8_t *rgb, int w, int h, int vol)
+{
+    ui_canvas_t c = { rgb, w, h, w * 4 };
+    char s[16];
+    snprintf(s, sizeof(s), "VOL %d%%", vol);
+    int sx = 2, sy = 4, pad = 10, m = 40;   /* m: clear of CRT overscan */
+    int tw = ui_text_w(s, sx), th = 8 * sy;
+    int bx = w - tw - 2 * pad - m, by = m;
+    if (bx < 0) bx = 0;
+    ui_fill(&c, bx, by, tw + 2 * pad, th + 2 * pad, 0x101010);
+    ui_hline2(&c, bx, by + th + 2 * pad - 2, tw + 2 * pad, 0xffa000);
+    ui_text(&c, bx + pad, by + pad, sx, sy, 0xffa000, s);
+    (void)h;
+}
 
 static void blend_overlay(void *opaque, uint8_t *rgb, int w, int h)
 {
@@ -112,6 +136,11 @@ static void blend_overlay(void *opaque, uint8_t *rgb, int w, int h)
         }
     }
     pthread_mutex_unlock(&e->spu_lock);
+
+    if (e->osd_ticks > 0) {
+        e->osd_ticks--;
+        draw_volume_osd(rgb, w, h, e->osd_vol);
+    }
 }
 
 static void prepare_epoch(void *ctx, uint64_t epoch)
@@ -559,6 +588,10 @@ static bool handle_key(struct engine *e, pidvd_key_t k)
     case PIDVD_KEY_PREV_CHAPTER: dvdnav_prev_pg_search(e->nav);     break;
     case PIDVD_KEY_STOP:   return false;
     case PIDVD_KEY_FIELD:  pidvd_video_toggle_field_parity(e->video); break;
+    case PIDVD_KEY_VOL_UP:   e->osd_vol = pidvd_audio_adjust_volume(+5);
+                             e->osd_ticks = OSD_FRAMES; break;
+    case PIDVD_KEY_VOL_DOWN: e->osd_vol = pidvd_audio_adjust_volume(-5);
+                             e->osd_ticks = OSD_FRAMES; break;
     default: break;
     }
     if (k == PIDVD_KEY_UP || k == PIDVD_KEY_DOWN || k == PIDVD_KEY_LEFT
