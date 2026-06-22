@@ -71,8 +71,10 @@ struct engine {
     pthread_mutex_t spu_lock;   /* spu state vs presenter blend thread */
     bool tff, rff;
     int64_t pts;            /* last decoded frame's pts, forwarded to presenter */
-    int osd_vol;            /* volume % to show; osd_ticks frames remaining */
-    int osd_ticks;          /* presenter-thread countdown (lock-free, benign) */
+    char osd_text[16];      /* transient corner OSD text (guarded by spu_lock) */
+    int osd_ticks;          /* frames the OSD stays up */
+    uint32_t spu_seen;      /* physical SPU substreams seen in this title */
+    int sub_user;           /* -2 follow VM, -1 off, else chosen substream */
     long frames;
     /* producer timing */
     double t_prev, t_acc, t_max;
@@ -85,14 +87,12 @@ struct engine {
 /* Frames a volume change stays on screen (~1.5 s at the field-paced rate). */
 #define OSD_FRAMES 48
 
-/* Transient "VOL nn%" chip, top-right. sy even keeps every edge interlace-safe
+/* Transient corner chip, top-right. sy even keeps every edge interlace-safe
  * (draw.h interlace law); drawn straight into the XRGB frame the presenter is
  * about to scan out. */
-static void draw_volume_osd(uint8_t *rgb, int w, int h, int vol)
+static void draw_osd(uint8_t *rgb, int w, int h, const char *s)
 {
     ui_canvas_t c = { rgb, w, h, w * 4 };
-    char s[16];
-    snprintf(s, sizeof(s), "VOL %d%%", vol);
     int sx = 2, sy = 4, pad = 10, m = 40;   /* m: clear of CRT overscan */
     int tw = ui_text_w(s, sx), th = 8 * sy;
     int bx = w - tw - 2 * pad - m, by = m;
@@ -101,6 +101,15 @@ static void draw_volume_osd(uint8_t *rgb, int w, int h, int vol)
     ui_hline2(&c, bx, by + th + 2 * pad - 2, tw + 2 * pad, 0xffa000);
     ui_text(&c, bx + pad, by + pad, sx, sy, 0xffa000, s);
     (void)h;
+}
+
+/* Post a corner OSD message (nav thread); read by the presenter under lock. */
+static void osd_show(struct engine *e, const char *text)
+{
+    pthread_mutex_lock(&e->spu_lock);
+    snprintf(e->osd_text, sizeof(e->osd_text), "%s", text);
+    e->osd_ticks = OSD_FRAMES;
+    pthread_mutex_unlock(&e->spu_lock);
 }
 
 static void blend_overlay(void *opaque, uint8_t *rgb, int w, int h)
@@ -135,12 +144,17 @@ static void blend_overlay(void *opaque, uint8_t *rgb, int w, int h)
             }
         }
     }
-    pthread_mutex_unlock(&e->spu_lock);
-
+    int osd = 0;
+    char osd_txt[16];
     if (e->osd_ticks > 0) {
         e->osd_ticks--;
-        draw_volume_osd(rgb, w, h, e->osd_vol);
+        memcpy(osd_txt, e->osd_text, sizeof(osd_txt));
+        osd = 1;
     }
+    pthread_mutex_unlock(&e->spu_lock);
+
+    if (osd)
+        draw_osd(rgb, w, h, osd_txt);
 }
 
 static void prepare_epoch(void *ctx, uint64_t epoch)
@@ -180,6 +194,8 @@ static void reset_stream_epoch(struct engine *e)
     uint64_t epoch = reset_audio_queue(e, true, true);
     e->vpts0 = -1;
     e->have_frame = false;
+    e->sub_user = -2;      /* new title: follow the VM until the user picks */
+    e->spu_seen = 0;       /* re-discover this title's subtitle tracks */
     pidvd_av_sync_reset(e->sync, epoch);
     pidvd_presenter_reset(e->pres);
 }
@@ -284,6 +300,8 @@ static void on_spu_es(void *opaque, int substream, const uint8_t *data,
 {
     struct engine *e = opaque;
     (void)pts;   /* SPU display timing: with the A/V clock, later */
+    if (substream >= 0 && substream < 32 && dvdnav_is_domain_vts(e->nav))
+        e->spu_seen |= 1u << substream;   /* a real subtitle track exists */
     pthread_mutex_lock(&e->spu_lock);
     pidvd_spu_packet(e->spu, substream, data, len);
     pthread_mutex_unlock(&e->spu_lock);
@@ -572,6 +590,48 @@ static void update_highlight(struct engine *e, bool repush)
 
 /* ---- input ------------------------------------------------------------ */
 
+/* Cycle the displayed subtitle over the substreams seen in this title:
+ * off -> 1 -> 2 -> ... -> off. Only in the title domain (menus own the SPU for
+ * their own graphics). The user's choice overrides the VM until a menu resets
+ * it (see DVDNAV_SPU_STREAM_CHANGE). */
+static void cycle_subtitle(struct engine *e)
+{
+    int seen[32], n = 0;
+    for (int i = 0; i < 32; i++)
+        if (e->spu_seen & (1u << i))
+            seen[n++] = i;
+    if (!dvdnav_is_domain_vts(e->nav))
+        return;
+    if (n == 0) {
+        osd_show(e, "NO SUBS");
+        return;
+    }
+    int next;
+    if (e->sub_user < 0) {            /* off / follow -> first track */
+        next = seen[0];
+    } else {
+        int idx = -1;
+        for (int i = 0; i < n; i++)
+            if (seen[i] == e->sub_user)
+                idx = i;
+        next = (idx >= 0 && idx + 1 < n) ? seen[idx + 1] : -1;  /* next / off */
+    }
+    e->sub_user = next;
+    pthread_mutex_lock(&e->spu_lock);
+    pidvd_spu_select_stream(e->spu, next);
+    pthread_mutex_unlock(&e->spu_lock);
+    if (next < 0) {
+        osd_show(e, "SUB OFF");
+    } else {
+        int pos = 1;
+        for (int i = 0; seen[i] != next; i++)
+            pos++;
+        char b[16];
+        snprintf(b, sizeof(b), "SUB %d", pos);
+        osd_show(e, b);
+    }
+}
+
 static bool handle_key(struct engine *e, pidvd_key_t k)
 {
     pci_t *pci = dvdnav_get_current_nav_pci(e->nav);
@@ -588,10 +648,15 @@ static bool handle_key(struct engine *e, pidvd_key_t k)
     case PIDVD_KEY_PREV_CHAPTER: dvdnav_prev_pg_search(e->nav);     break;
     case PIDVD_KEY_STOP:   return false;
     case PIDVD_KEY_FIELD:  pidvd_video_toggle_field_parity(e->video); break;
-    case PIDVD_KEY_VOL_UP:   e->osd_vol = pidvd_audio_adjust_volume(+5);
-                             e->osd_ticks = OSD_FRAMES; break;
-    case PIDVD_KEY_VOL_DOWN: e->osd_vol = pidvd_audio_adjust_volume(-5);
-                             e->osd_ticks = OSD_FRAMES; break;
+    case PIDVD_KEY_VOL_UP:
+    case PIDVD_KEY_VOL_DOWN: {
+        int v = pidvd_audio_adjust_volume(k == PIDVD_KEY_VOL_UP ? +5 : -5);
+        char b[16];
+        snprintf(b, sizeof(b), "VOL %d%%", v);
+        osd_show(e, b);
+        break;
+    }
+    case PIDVD_KEY_SUBTITLE: cycle_subtitle(e); break;
     default: break;
     }
     if (k == PIDVD_KEY_UP || k == PIDVD_KEY_DOWN || k == PIDVD_KEY_LEFT
@@ -644,6 +709,7 @@ int pidvd_nav_play(const char *iso_path)
     e.input = pidvd_input_open();
     e.vpts0 = -1;
     e.cur_audio = 0;
+    e.sub_user = -2;   /* subtitles follow the disc until the user cycles SUB */
     e.a_run = true;
     pthread_create(&e.audio_thread, NULL, audio_loop, &e);
     e.fy = calloc(1, FRAME_W * FRAME_H);
@@ -715,7 +781,14 @@ int pidvd_nav_play(const char *iso_path)
         case DVDNAV_SPU_STREAM_CHANGE: {
             dvdnav_spu_stream_change_event_t *ev = (void *)blk;
             int phys = (int8_t)ev->physical_wide;
-            pidvd_spu_select_stream(e.spu, phys < 0 ? -1 : (phys & 0x1f));
+            int vm = phys < 0 ? -1 : (phys & 0x1f);
+            if (!dvdnav_is_domain_vts(e.nav))
+                e.sub_user = -2;   /* menus: the VM owns the SPU stream */
+            if (e.sub_user == -2) {   /* otherwise the user's choice stands */
+                pthread_mutex_lock(&e.spu_lock);
+                pidvd_spu_select_stream(e.spu, vm);
+                pthread_mutex_unlock(&e.spu_lock);
+            }
             break;
         }
         case DVDNAV_HIGHLIGHT:
