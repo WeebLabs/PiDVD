@@ -5,7 +5,7 @@
 #include "platform/platform.h"
 #include "sync/audio_resampler.h"
 
-#define AUDIO_PRIME_MS 128
+#define AUDIO_PRIME_MS 100
 #define AUDIO_OUT_FRAMES 2048
 
 struct pidvd_audio_playback {
@@ -86,7 +86,11 @@ static bool update_servo(pidvd_audio_playback_t *p)
         return true;
     int ppm = pidvd_av_sync_audio_correction(
         p->sync, p->epoch, audio_pts, status.monotonic_ns, NULL);
-    return pidvd_audio_resampler_set_correction(p->resampler, ppm);
+    /* Best-effort rate nudge. A SpeexDSP filter rebuild can transiently fail
+     * (e.g. allocation under memory pressure); that must not tear down the
+     * whole output timeline — keep the last good rate and retry next tick. */
+    pidvd_audio_resampler_set_correction(p->resampler, ppm);
+    return true;
 }
 
 bool pidvd_audio_playback_write(pidvd_audio_playback_t *p,

@@ -19,6 +19,7 @@ struct timeline_segment {
 struct pidvd_audio_resampler {
     SpeexResamplerState *state;
     int sample_rate;
+    int output_rate;        /* current resampled output rate (Hz) */
     int correction_ppm;
     int64_t output_cursor;
     double next_output_pts;
@@ -77,6 +78,7 @@ bool pidvd_audio_resampler_reset(pidvd_audio_resampler_t *r, int sample_rate)
         return false;
     }
     r->sample_rate = sample_rate;
+    r->output_rate = sample_rate;
     r->correction_ppm = 0;
     clear_timeline(r);
     return true;
@@ -85,18 +87,26 @@ bool pidvd_audio_resampler_reset(pidvd_audio_resampler_t *r, int sample_rate)
 bool pidvd_audio_resampler_set_correction(pidvd_audio_resampler_t *r,
                                           int ppm)
 {
-    if (ppm == r->correction_ppm)
-        return true;
-    int output_scale = RATIO_SCALE + ppm;
-    if (output_scale <= 0)
+    if (RATIO_SCALE + ppm <= 0)
         return false;
+    /* Drive the resampler with plain integer rates (in_rate -> output_rate).
+     * A high-resolution num/den fraction such as 1000000/(1000000+ppm) reduces
+     * to a ~500000 denominator that overflows SpeexDSP's filter math near the
+     * correction rail; integer Hz rates keep the fraction small and safe. The
+     * 1 Hz output-rate quantum (~21 ppm at 48 kHz) is far finer than any real
+     * oscillator drift, and acts as a natural deadband against filter churn. */
     int output_rate = (int)lrint(r->sample_rate
-                               * (output_scale / (double)RATIO_SCALE));
-    int err = speex_resampler_set_rate_frac(
-        r->state, RATIO_SCALE, (spx_uint32_t)output_scale,
-        (spx_uint32_t)r->sample_rate, (spx_uint32_t)output_rate);
-    if (err != RESAMPLER_ERR_SUCCESS)
+                               * (1.0 + ppm / (double)RATIO_SCALE));
+    if (output_rate == r->output_rate) {
+        r->correction_ppm = ppm;
+        return true;
+    }
+    if (speex_resampler_set_rate_frac(
+            r->state, (spx_uint32_t)r->sample_rate, (spx_uint32_t)output_rate,
+            (spx_uint32_t)r->sample_rate, (spx_uint32_t)output_rate)
+        != RESAMPLER_ERR_SUCCESS)
         return false;
+    r->output_rate = output_rate;
     r->correction_ppm = ppm;
     return true;
 }
@@ -151,9 +161,8 @@ bool pidvd_audio_resampler_process(pidvd_audio_resampler_t *r,
         || consumed != (spx_uint32_t)in_frames)
         return false;
 
-    double stretch = (RATIO_SCALE + r->correction_ppm)
-                   / (double)RATIO_SCALE;
-    double ticks = 90000.0 / (r->sample_rate * stretch);
+    /* Each output frame spans one tick-period of the resampled rate. */
+    double ticks = 90000.0 / r->output_rate;
     add_segment(r, (int)produced, ticks);
     *out_frames = (int)produced;
     return true;

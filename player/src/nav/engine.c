@@ -360,6 +360,7 @@ static void *audio_loop(void *opaque)
     bool first_chunk = true;
     int64_t alignment_pts = -1;
     bool alignment_follows_display = false;
+    int reprimes = 0;
     struct achunk staged[AUDIO_STAGE];
     int staged_count = 0, staged_frames = 0, staged_rate = 0;
 
@@ -382,6 +383,7 @@ static void *audio_loop(void *opaque)
             first_chunk = true;
             alignment_pts = -1;
             alignment_follows_display = false;
+            reprimes = 0;
             staged_count = staged_frames = staged_rate = 0;
             continue;
         }
@@ -395,6 +397,24 @@ static void *audio_loop(void *opaque)
             continue;
         if (disabled)
             continue;
+
+        /* Coarse startup catch-up. When video is already running while we are
+         * still priming — the startup gate timed out, or this is a re-prime —
+         * the queue holds stale audio from the epoch's start that is now well
+         * behind the picture. Writing it would force the slew-limited servo to
+         * fast-forward for a minute, draining the buffer to an underrun. Drop
+         * whole chunks that trail the display clock so audio primes at the live
+         * point and starts already in sync; the servo only trims the rest. */
+        if (!playback
+            && pidvd_av_sync_video_is_started(e->sync, local_epoch)) {
+            int64_t disp;
+            int64_t chunk_end = c.pts + (int64_t)c.nframes * 90000 / c.rate;
+            if (pidvd_av_sync_display_now(e->sync, local_epoch, &disp)
+                && chunk_end < disp - 9000 /* >100 ms behind the picture */) {
+                staged_count = staged_frames = staged_rate = 0;
+                continue;
+            }
+        }
 
         if (playback && pidvd_audio_playback_rate(playback) != c.rate) {
             pidvd_audio_playback_free(playback, true);
@@ -427,8 +447,18 @@ static void *audio_loop(void *opaque)
                 < pidvd_audio_playback_prime_frames(staged_rate))
                 continue;
 
+            /* If video is already running — either we never gated it, or the
+             * startup gate timed out before audio primed on a slow disc —
+             * start audio at the live display position instead of the epoch's
+             * first PTS. Otherwise audio begins however many hundred ms behind
+             * and the slew-limited servo rails for a minute clawing it back,
+             * starving the buffer (audible dropouts). Skipping the stale audio
+             * to the display clock starts it already in sync. */
+            bool video_running =
+                pidvd_av_sync_video_is_started(e->sync, local_epoch);
             alignment_pts = staged[0].video_start_pts;
-            alignment_follows_display = !staged[0].gates_video;
+            alignment_follows_display =
+                !staged[0].gates_video || video_running;
             if (alignment_follows_display) {
                 int64_t display_pts;
                 if (pidvd_av_sync_display_now(e->sync, local_epoch,
@@ -449,8 +479,10 @@ static void *audio_loop(void *opaque)
                 ok = write_aligned_audio(playback, &staged[i],
                                          alignment_pts, &first_chunk);
             staged_count = staged_frames = staged_rate = 0;
-            if (ok)
+            if (ok) {
+                reprimes = 0;   /* a clean (re)prime clears the failure count */
                 continue;
+            }
         } else {
             if (first_chunk && alignment_follows_display) {
                 int64_t display_pts;
@@ -464,12 +496,22 @@ static void *audio_loop(void *opaque)
                 continue;
         }
 
-        /* Any path reaching here failed the output timeline. */
-        fprintf(stderr, "audio: playback timeline failed, muting epoch\n");
-        pidvd_av_sync_audio_ready(e->sync, local_epoch, false);
+        /* A path reaching here failed the output timeline (e.g. an ALSA
+         * underrun recovery could not paper over). Flush and re-prime rather
+         * than muting the rest of the title; the re-prime aligns to the live
+         * display clock, so audio simply resumes in sync. Give up only if it
+         * keeps failing, which indicates the device itself is gone. */
         pidvd_audio_playback_free(playback, true);
         playback = NULL;
-        disabled = true;
+        first_chunk = true;
+        alignment_pts = -1;
+        alignment_follows_display = false;
+        staged_count = staged_frames = staged_rate = 0;
+        if (++reprimes > 8) {
+            fprintf(stderr, "audio: output keeps failing, muting\n");
+            pidvd_av_sync_audio_ready(e->sync, local_epoch, false);
+            disabled = true;
+        }
     }
     pidvd_audio_playback_free(playback, false);
     return NULL;
