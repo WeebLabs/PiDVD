@@ -22,6 +22,7 @@ typedef struct {
     char     format[16];   /* "AC-3", "LPCM", "MPEG-2", "DTS", ... */
     char     lang[4];      /* ISO 639 code or "--" */
     uint8_t  channels;
+    uint8_t  phys;         /* physical PES stream id (0..7) */
 } pidvd_audio_stream_t;
 
 typedef struct {

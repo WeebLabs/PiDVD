@@ -57,7 +57,8 @@ struct engine {
     struct achunk aring[ARING];
     int a_head, a_tail, a_count;
     bool a_run;
-    int cur_audio;          /* selected AC-3 substream */
+    int cur_audio;          /* active AC-3 substream the demux decodes */
+    int aud_user;           /* -1 follow VM, else user-chosen substream */
     int64_t vpts0;          /* first displayed video pts (start gate) */
     uint64_t epoch;
     uint64_t audio_serial;
@@ -212,6 +213,7 @@ static void reset_stream_epoch(struct engine *e)
     e->vpts0 = -1;
     e->have_frame = false;
     e->sub_user = -2;      /* new title: follow the VM until the user picks */
+    e->aud_user = -1;      /* new title: follow the VM's default audio */
     e->spu_seen = 0;       /* re-discover this title's subtitle tracks */
     e->sub_clear_ns = 0;   /* drop any pending subtitle-clear deadline */
     pidvd_av_sync_reset(e->sync, epoch);
@@ -698,6 +700,46 @@ static void cycle_subtitle(struct engine *e)
     osd_show(e, b);
 }
 
+/* OSD label for an audio track: "AUD <LANG> <ch>CH", or "AUD <n> <ch>CH" when
+ * the IFO gave no language (so same-language tracks stay distinguishable by
+ * their channel count). buf must hold >= 16 bytes. */
+static void aud_label(char *buf, const pidvd_audio_stream_t *as, int pos1)
+{
+    if (as->lang[0] && as->lang[0] != '-')
+        snprintf(buf, 16, "AUD %c%c %dCH", toupper((unsigned char)as->lang[0]),
+                 toupper((unsigned char)as->lang[1]), as->channels);
+    else
+        snprintf(buf, 16, "AUD %d %dCH", pos1, as->channels);
+}
+
+/* Cycle the audio over this title's tracks: 1 -> 2 -> ... -> 1 (no off). The
+ * track list + languages come from the IFO; title domain only. The user's
+ * choice overrides the VM until a menu resets it (DVDNAV_AUDIO_STREAM_CHANGE). */
+static void cycle_audio(struct engine *e)
+{
+    if (!dvdnav_is_domain_vts(e->nav))
+        return;
+    const pidvd_title_t *t = cur_title(e);
+    if (!t || t->n_audio < 1)
+        return;
+    char b[16];
+    if (t->n_audio == 1) {                 /* nothing to switch to */
+        aud_label(b, &t->audio[0], 1);
+        osd_show(e, b);
+        return;
+    }
+    int idx = -1;
+    for (int i = 0; i < t->n_audio; i++)
+        if (t->audio[i].phys == e->cur_audio) { idx = i; break; }
+    int ni = (idx >= 0) ? (idx + 1) % t->n_audio : 0;
+    e->aud_user = t->audio[ni].phys;
+    e->cur_audio = t->audio[ni].phys;
+    pidvd_adec_reset(e->adec);
+    reset_audio_stream(e);
+    aud_label(b, &t->audio[ni], ni + 1);
+    osd_show(e, b);
+}
+
 static bool handle_key(struct engine *e, pidvd_key_t k)
 {
     pci_t *pci = dvdnav_get_current_nav_pci(e->nav);
@@ -723,6 +765,7 @@ static bool handle_key(struct engine *e, pidvd_key_t k)
         break;
     }
     case PIDVD_KEY_SUBTITLE: cycle_subtitle(e); break;
+    case PIDVD_KEY_AUDIO:    cycle_audio(e); break;
     default: break;
     }
     if (k == PIDVD_KEY_UP || k == PIDVD_KEY_DOWN || k == PIDVD_KEY_LEFT
@@ -782,6 +825,7 @@ int pidvd_nav_play(const char *iso_path)
     e.input = pidvd_input_open();
     e.vpts0 = -1;
     e.cur_audio = 0;
+    e.aud_user = -1;   /* audio follows the disc until the user cycles AUDIO */
     e.sub_user = -2;   /* subtitles follow the disc until the user cycles SUB */
     e.a_run = true;
     pthread_create(&e.audio_thread, NULL, audio_loop, &e);
@@ -898,7 +942,9 @@ int pidvd_nav_play(const char *iso_path)
         case DVDNAV_AUDIO_STREAM_CHANGE: {
             dvdnav_audio_stream_change_event_t *ev = (void *)blk;
             int phys = (int8_t)ev->physical;
-            if (phys >= 0 && (phys & 7) != e.cur_audio) {
+            if (!dvdnav_is_domain_vts(e.nav))
+                e.aud_user = -1;   /* menus: follow the VM */
+            if (e.aud_user < 0 && phys >= 0 && (phys & 7) != e.cur_audio) {
                 e.cur_audio = phys & 7;
                 pidvd_adec_reset(e.adec);
                 reset_audio_stream(&e);

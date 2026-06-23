@@ -152,6 +152,8 @@ pidvd_disc_t *pidvd_disc_open(const char *path)
                      audio_format_name(aa->audio_format));
             lang_str(aa->lang_code, as->lang);
             as->channels = (uint8_t)(aa->channels + 1);
+            /* audio_control bits 10-8 hold the physical PES stream id. */
+            as->phys = (uint8_t)((pgc ? pgc->audio_control[a] >> 8 : a) & 7);
         }
 
         int n_subp = vts->vtsi_mat->nr_of_vts_subp_streams;
