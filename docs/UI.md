@@ -289,7 +289,7 @@ from ATTRACT. Same chrome as BROWSE; one centered panel:
 
    THEME             ◂ AMBER & ICE ▸
    LAYOUT            ◂ CONSOLE ▸
-   AUDIO OUTPUT      ◂ STEREO DOWNMIX ▸
+   AUDIO OUTPUT      ◂ DISPLAY-SYNC PCM ▸
    ATTRACT DIM       ◂ AFTER 15 MIN ▸
    SCREENSAVER       ◂ WARP STARFIELD ▸
    COMP FILTER       ◂ 5 ▸
@@ -304,12 +304,14 @@ from ATTRACT. Same chrome as BROWSE; one centered panel:
   the value only. LEFT/RIGHT cycle a value and it applies **instantly** —
   flipping themes/layouts live on the CRT is half the fun. ENTER fires
   action rows (rescan). MENU or STOP exits.
-- Values: THEME (§2 four), LAYOUT (CONSOLE/MARQUEE/LEDGER), AUDIO OUTPUT
-  (STEREO DOWNMIX / AC-3 PASSTHROUGH), ATTRACT DIM (OFF / 5 / 15 / 30 MIN —
-  blanks to the drifting logo bug, CRT burn-in kindness), SCREENSAVER
-  (OFF / WARP STARFIELD / DVD LOGO — §5.7), COMP FILTER (OFF / 1..8, the menu's
-  composite low-pass). There is *no* menu-mode setting: the menu is always
-  240p NTSC (§1).
+- Values: THEME (§2 four), LAYOUT (CONSOLE/MARQUEE/LEDGER), AUDIO DEVICE
+  (AUTO — USB preferred, bcm2835 PWM fallback, never HDMI — or any connected
+  card), VOLUME (0..100, the output card's UAC mixer), ATTRACT DIM
+  (OFF / 5 / 15 / 30 MIN — blanks to the drifting logo bug, CRT burn-in
+  kindness), SCREENSAVER (OFF / WARP STARFIELD / DVD LOGO — §5.7), COMP FILTER
+  (OFF / 1..8, the menu's composite low-pass). There is *no* menu-mode setting:
+  the menu is always 240p NTSC (§1). During playback, VOL± adjusts volume and
+  SUB cycles subtitle tracks, each with a brief on-screen indicator.
 - **Persistence**: `pidvd.cfg` (`key=value`) on the SD boot partition —
   the appliance's NVRAM, independent of whatever drive is inserted.
   Write path: remount rw → write → sync → remount ro; failure degrades

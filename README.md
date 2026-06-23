@@ -16,7 +16,7 @@ DVD ISO (USB drive)
        └─ field-accurate presenter (honors TFF/RFF, native 3:2 cadence)
             ├─ Milestone 1: composite (VEC)            → CRT
             ├─ Milestone 3: VGA666 (18-bit DPI) → UMSA → SCART CRT
-            └─ audio: USB S/PDIF (IEC 61937 AC-3 passthrough / PCM)
+            └─ display-locked PCM → USB S/PDIF (adaptive resampling)
 ```
 
 ## Repository layout

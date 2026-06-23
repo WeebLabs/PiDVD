@@ -9,7 +9,11 @@
  * the `echo up > /tmp/pidvd-ctl` over ssh that docs/UI.md describes, so it
  * needs no cooperation from the player and can come and go independently.
  *
- *   pidvd-remote [port] [fifo]      default: 8080 /tmp/pidvd-ctl
+ *   pidvd-remote [port] [fifo] [stat]   default: 8080 /tmp/pidvd-ctl
+ *                                       /tmp/pidvd-stat
+ *
+ * It also serves GET /stat: the live presentation rate and 1% low that the
+ * player publishes to that stats file once a second, which the page polls.
  *
  * Pure POSIX sockets: builds and runs on the Pi and on the macOS host (point
  * it at a FIFO you `cat` to watch the words for UI work without a board).
@@ -26,15 +30,18 @@
 
 #define DEFAULT_PORT 8080
 #define DEFAULT_FIFO "/tmp/pidvd-ctl"
+#define DEFAULT_STAT "/tmp/pidvd-stat"
 
 /* The control words the player understands (input_evdev.c map_word). The
  * remote can write nothing else — this list is the whole attack surface. */
 static const char *const KEYS[] = {
     "up",   "down", "left",  "right", "enter", "menu",  "title",
-    "pause", "stop", "next", "prev",  "audio", "sub",   NULL,
+    "pause", "stop", "next", "prev",  "audio", "sub",
+    "volup", "voldown", NULL,
 };
 
 static const char *fifo_path = DEFAULT_FIFO;
+static const char *stat_path = DEFAULT_STAT;
 
 static int valid_key(const char *w)
 {
@@ -92,8 +99,15 @@ static const char PAGE[] =
 "font-size:18px;color:var(--bright)}.pad .right{grid-area:2/3}"
 ".pad .down{grid-area:3/2}"
 ".st{height:16px;font-size:12px;letter-spacing:.2em;color:var(--dim)}"
+".stats{display:flex;gap:22px;font-size:12px;letter-spacing:.18em;"
+"color:var(--dim)}.stats b{color:var(--bright);font-size:15px;"
+"letter-spacing:.05em}.stats .lo b{color:var(--bar)}"
 "</style></head><body>"
 "<div class=hd>\xe2\x97\x89 <b>PiDVD</b> REMOTE</div>"
+"<div class=stats>"
+"<span>FPS <b id=fps>\xe2\x80\x94</b></span>"
+"<span class=lo>1% LOW <b id=low>\xe2\x80\x94</b></span>"
+"</div>"
 "<div class=pad>"
 "<button class=up data-k=up>\xe2\x96\xb2</button>"
 "<button class=left data-k=left>\xe2\x97\x82</button>"
@@ -115,6 +129,10 @@ static const char PAGE[] =
 "<button class=wide data-k=audio>AUDIO</button>"
 "<button class=wide data-k=sub>SUB</button>"
 "</div>"
+"<div class=row>"
+"<button class=wide data-k=voldown>VOL \xe2\x88\x92</button>"
+"<button class=wide data-k=volup>VOL +</button>"
+"</div>"
 "<div class=st id=st>&nbsp;</div>"
 "<script>"
 "var st=document.getElementById('st');"
@@ -125,6 +143,13 @@ static const char PAGE[] =
 "}).catch(function(){st.textContent='\xe2\x9c\x95 OFFLINE'});}"
 "document.querySelectorAll('button').forEach(function(b){"
 "b.addEventListener('pointerdown',function(e){e.preventDefault();tap(b)});});"
+"var fps=document.getElementById('fps'),low=document.getElementById('low');"
+"function fmt(v){v=parseFloat(v);return(v>0&&isFinite(v))?v.toFixed(1):'\xe2\x80\x94'}"
+"function poll(){fetch('/stat').then(function(r){return r.text()}).then("
+"function(t){var a=t.trim().split(/\\s+/);fps.textContent=fmt(a[0]);"
+"low.textContent=fmt(a[1])}).catch(function(){fps.textContent='\xe2\x80\x94';"
+"low.textContent='\xe2\x80\x94'});}"
+"setInterval(poll,1000);poll();"
 "</script></body></html>";
 
 static void respond(int fd, const char *status, const char *ctype,
@@ -173,6 +198,22 @@ static void handle(int fd)
         return;
     }
 
+    /* Live stats the player publishes once a second: "<fps> <1%low>". Served
+     * raw for the page to poll; absent/empty (no playback) reads as idle. */
+    if (!strcmp(path, "/stat")) {
+        char body[64] = "0 0\n";
+        size_t len = 4;
+        int sfd = open(stat_path, O_RDONLY);
+        if (sfd >= 0) {
+            ssize_t k = read(sfd, body, sizeof(body) - 1);
+            close(sfd);
+            if (k > 0)
+                len = (size_t)k;
+        }
+        respond(fd, "200 OK", "text/plain", body, len);
+        return;
+    }
+
     if (!strcmp(path, "/") || !strcmp(path, "/index.html")) {
         respond(fd, "200 OK", "text/html; charset=utf-8", PAGE,
                 sizeof(PAGE) - 1);
@@ -187,8 +228,10 @@ int main(int argc, char **argv)
     int port = argc > 1 ? atoi(argv[1]) : DEFAULT_PORT;
     if (argc > 2)
         fifo_path = argv[2];
+    if (argc > 3)
+        stat_path = argv[3];
     if (port <= 0 || port > 65535) {
-        fprintf(stderr, "usage: %s [port] [fifo]\n", argv[0]);
+        fprintf(stderr, "usage: %s [port] [fifo] [stat]\n", argv[0]);
         return 2;
     }
 

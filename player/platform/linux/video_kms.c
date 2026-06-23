@@ -49,7 +49,6 @@ struct pidvd_video {
     unsigned last_flip_seq;
     long flips;
     long delta_hist[6];   /* fields between flips: [0]=other, 1..5 */
-    double t_last;
 };
 
 static int create_buf(int fd, int w, int h, struct kms_buf *b)
@@ -507,7 +506,11 @@ pidvd_frame_t *pidvd_video_begin_frame(pidvd_video_t *v)
     return &v->frame;
 }
 
-struct flip_evt { bool pending; unsigned seq; };
+struct flip_evt {
+    bool pending;
+    unsigned seq;
+    int64_t monotonic_ns;
+};
 
 static void flip_done(int fd, unsigned frame, unsigned sec, unsigned usec,
                       void *data)
@@ -515,6 +518,9 @@ static void flip_done(int fd, unsigned frame, unsigned sec, unsigned usec,
     struct flip_evt *e = data;
     (void)fd; (void)sec; (void)usec;
     e->seq = frame;
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    e->monotonic_ns = (int64_t)now.tv_sec * 1000000000 + now.tv_nsec;
     e->pending = false;
 }
 
@@ -595,7 +601,7 @@ void pidvd_video_set_hfilter(pidvd_video_t *v, unsigned level)
 }
 
 bool pidvd_video_present(pidvd_video_t *v, pidvd_frame_t *f,
-                         bool tff, bool rff)
+                         bool tff, bool rff, pidvd_video_stamp_t *stamp)
 {
     (void)f;
     /* Field-cadence flips. The vblank sequence ticks once per field (kernel
@@ -671,17 +677,10 @@ bool pidvd_video_present(pidvd_video_t *v, pidvd_frame_t *f,
     unsigned delta = evt.seq - v->last_flip_seq;
     v->last_flip_seq = evt.seq;
     v->delta_hist[delta <= 5 ? delta : 0]++;
-    if (++v->flips % 50 == 0) {
-        struct timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        double t = now.tv_sec + now.tv_nsec / 1e9;
-        double fps = v->t_last > 0 ? 50.0 / (t - v->t_last) : 0;
-        v->t_last = t;
-        fprintf(stderr, "video: flips=%ld fps=%.2f seq-deltas 1:%ld 2:%ld "
-                "3:%ld 4:%ld 5:%ld other:%ld (seq %u)\n",
-                v->flips, fps, v->delta_hist[1], v->delta_hist[2],
-                v->delta_hist[3], v->delta_hist[4], v->delta_hist[5],
-                v->delta_hist[0], evt.seq);
+    v->flips++;
+    if (stamp) {
+        stamp->sequence = evt.seq;
+        stamp->monotonic_ns = evt.monotonic_ns;
     }
     return true;
 }
@@ -714,6 +713,12 @@ void pidvd_video_close(pidvd_video_t *v)
 {
     if (!v)
         return;
+    if (v->flips > 0)
+        fprintf(stderr, "video: flips=%ld seq-deltas 1:%ld 2:%ld 3:%ld "
+                "4:%ld 5:%ld other:%ld\n",
+                v->flips, v->delta_hist[1], v->delta_hist[2],
+                v->delta_hist[3], v->delta_hist[4], v->delta_hist[5],
+                v->delta_hist[0]);
     if (v->fd >= 0)
         free_buffers(v);
     if (v->fd >= 0)
