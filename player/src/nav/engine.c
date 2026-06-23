@@ -1,6 +1,7 @@
 #define _GNU_SOURCE   /* CPU_SET / pthread affinity */
 #include "nav/engine.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -73,6 +74,7 @@ struct engine {
     int64_t pts;            /* last decoded frame's pts, forwarded to presenter */
     char osd_text[16];      /* transient corner OSD text (guarded by spu_lock) */
     int osd_ticks;          /* frames the OSD stays up */
+    pidvd_disc_t *disc;     /* IFO model for subtitle-track enumeration */
     uint32_t spu_seen;      /* physical SPU substreams seen in this title */
     int sub_user;           /* -2 follow VM, -1 off, else chosen substream */
     long frames;
@@ -590,46 +592,84 @@ static void update_highlight(struct engine *e, bool repush)
 
 /* ---- input ------------------------------------------------------------ */
 
-/* Cycle the displayed subtitle over the substreams seen in this title:
- * off -> 1 -> 2 -> ... -> off. Only in the title domain (menus own the SPU for
- * their own graphics). The user's choice overrides the VM until a menu resets
- * it (see DVDNAV_SPU_STREAM_CHANGE). */
+/* The IFO title record dvdnav is currently playing, or NULL. */
+static const pidvd_title_t *cur_title(struct engine *e)
+{
+    if (!e->disc)
+        return NULL;
+    int32_t title = 0, part = 0;
+    if (dvdnav_current_title_info(e->nav, &title, &part) != DVDNAV_STATUS_OK
+        || title < 1)
+        return NULL;
+    for (int i = 0; i < pidvd_disc_title_count(e->disc); i++) {
+        const pidvd_title_t *t = pidvd_disc_title(e->disc, i);
+        if (t->title_nr == title)
+            return t;
+    }
+    return NULL;
+}
+
+/* Cycle the subtitle over this title's tracks: off -> 1 -> 2 -> ... -> off.
+ * The track list comes from the disc IFO, so any track is selectable
+ * immediately — before its first subtitle has been demuxed — and is labelled
+ * by language. Falls back to the substreams actually seen if the IFO model is
+ * unavailable. Title domain only (menus own the SPU); the user's choice
+ * overrides the VM until a menu resets it (see DVDNAV_SPU_STREAM_CHANGE). */
 static void cycle_subtitle(struct engine *e)
 {
-    int seen[32], n = 0;
-    for (int i = 0; i < 32; i++)
-        if (e->spu_seen & (1u << i))
-            seen[n++] = i;
     if (!dvdnav_is_domain_vts(e->nav))
         return;
+
+    int phys[PIDVD_MAX_SUBP], n = 0;
+    const char *lang[PIDVD_MAX_SUBP];
+    const pidvd_title_t *t = cur_title(e);
+    if (t && t->n_subp > 0) {
+        for (int i = 0; i < t->n_subp; i++) {
+            phys[n] = t->subp[i].phys;
+            lang[n] = t->subp[i].lang;
+            n++;
+        }
+    } else {
+        for (int i = 0; i < 32; i++)
+            if (e->spu_seen & (1u << i)) {
+                phys[n] = i;
+                lang[n] = "--";
+                n++;
+            }
+    }
     if (n == 0) {
         osd_show(e, "NO SUBS");
         return;
     }
-    int next;
-    if (e->sub_user < 0) {            /* off / follow -> first track */
-        next = seen[0];
+
+    int next, ni = -1;                   /* ni: index of next in phys[] */
+    if (e->sub_user < 0) {               /* off / follow -> first track */
+        next = phys[0];
+        ni = 0;
     } else {
         int idx = -1;
         for (int i = 0; i < n; i++)
-            if (seen[i] == e->sub_user)
-                idx = i;
-        next = (idx >= 0 && idx + 1 < n) ? seen[idx + 1] : -1;  /* next / off */
+            if (phys[i] == e->sub_user) { idx = i; break; }
+        if (idx >= 0 && idx + 1 < n) { next = phys[idx + 1]; ni = idx + 1; }
+        else next = -1;                  /* past last -> off */
     }
     e->sub_user = next;
     pthread_mutex_lock(&e->spu_lock);
     pidvd_spu_select_stream(e->spu, next);
     pthread_mutex_unlock(&e->spu_lock);
+
     if (next < 0) {
         osd_show(e, "SUB OFF");
-    } else {
-        int pos = 1;
-        for (int i = 0; seen[i] != next; i++)
-            pos++;
-        char b[16];
-        snprintf(b, sizeof(b), "SUB %d", pos);
-        osd_show(e, b);
+        return;
     }
+    char b[16];
+    const char *L = lang[ni];
+    if (L && L[0] && L[0] != '-')
+        snprintf(b, sizeof(b), "SUB %c%c", toupper((unsigned char)L[0]),
+                 toupper((unsigned char)L[1]));
+    else
+        snprintf(b, sizeof(b), "SUB %d", ni + 1);
+    osd_show(e, b);
 }
 
 static bool handle_key(struct engine *e, pidvd_key_t k)
@@ -678,11 +718,18 @@ int pidvd_nav_play(const char *iso_path)
     }
     dvdnav_set_readahead_flag(e.nav, 1);
     dvdnav_set_PGC_positioning_flag(e.nav, 1);
+    /* IFO model alongside dvdnav, for up-front subtitle-track enumeration
+     * (non-fatal: cycle_subtitle falls back to seen substreams without it). */
+    e.disc = pidvd_disc_open(iso_path);
 
     e.std = initial_standard(iso_path);
     e.video = pidvd_video_open(e.std);
-    if (!e.video)
+    if (!e.video) {
+        if (e.disc)
+            pidvd_disc_close(e.disc);
+        dvdnav_close(e.nav);
         return 1;
+    }
     /* nav+decode use cores 0-1; CPU 2 owns resampling/ALSA and CPU 3 owns
      * presentation. Neither support pipeline can preempt the video core. */
     cpu_set_t cpus;
@@ -863,6 +910,8 @@ int pidvd_nav_play(const char *iso_path)
     free(e.fy);
     free(e.fu);
     free(e.fv);
+    if (e.disc)
+        pidvd_disc_close(e.disc);
     dvdnav_close(e.nav);
     return 0;
 }

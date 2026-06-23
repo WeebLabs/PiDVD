@@ -159,8 +159,21 @@ pidvd_disc_t *pidvd_disc_open(const char *path)
         for (int s = 0; s < n_subp; s++) {
             if (pgc && !(pgc->subp_control[s] & 0x80000000u))
                 continue;
-            lang_str(vts->vtsi_mat->vts_subp_attr[s].lang_code,
-                     t->subp[t->n_subp++].lang);
+            /* subp_control packs the physical PES substream id per display
+             * mode: bits 28-24 = 4:3, 20-16 = wide, 12-8 = letterbox,
+             * 4-0 = pan-scan. Pick the field matching this title's aspect —
+             * that is the substream the demux actually carries on screen.
+             * No PGC (degenerate): assume physical == logical. */
+            pidvd_subp_stream_t *sp = &t->subp[t->n_subp++];
+            lang_str(vts->vtsi_mat->vts_subp_attr[s].lang_code, sp->lang);
+            int phys = s;
+            if (pgc) {
+                uint32_t c = pgc->subp_control[s];
+                phys = (t->aspect == PIDVD_ASPECT_16_9)
+                     ? (int)((c >> 16) & 0x1f)
+                     : (int)((c >> 24) & 0x1f);
+            }
+            sp->phys = (uint8_t)phys;
         }
     }
 

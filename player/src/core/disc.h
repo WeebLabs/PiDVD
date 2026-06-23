@@ -25,7 +25,8 @@ typedef struct {
 } pidvd_audio_stream_t;
 
 typedef struct {
-    char lang[4];
+    char    lang[4];
+    uint8_t phys;   /* physical PES substream id (0..31) for this title's aspect */
 } pidvd_subp_stream_t;
 
 #define PIDVD_MAX_AUDIO 8
