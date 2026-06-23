@@ -37,6 +37,9 @@ void pidvd_presenter_push(pidvd_presenter_t *p,
 /* Discard queued frames from an obsolete epoch. Waits only for an in-flight
  * flip/conversion to finish, so ring storage can never be overwritten live. */
 void pidvd_presenter_reset(pidvd_presenter_t *p);
+/* Hold the displayed frame (pause) or release it (resume). While held the
+ * presenter stops advancing and stops publishing the display clock. */
+void pidvd_presenter_set_paused(pidvd_presenter_t *p, bool paused);
 /* Drain remaining frames, stop the thread; returns frames shown. */
 long pidvd_presenter_stop(pidvd_presenter_t *p);
 

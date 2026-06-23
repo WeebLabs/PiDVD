@@ -63,6 +63,7 @@ struct pidvd_presenter {
     int head, tail, count;     /* guarded by lock */
     bool busy;
     bool running;
+    bool paused;               /* hold the last frame; KMS keeps it on screen */
     long frames;
     /* presenter-thread only: live fps + 1% low bookkeeping */
     int64_t fps_pub_ns;        /* last time stats were published */
@@ -216,7 +217,7 @@ static void *present_loop(void *opaque)
 
     for (;;) {
         pthread_mutex_lock(&p->lock);
-        while (p->count == 0 && p->running)
+        while ((p->count == 0 || p->paused) && p->running)
             pthread_cond_wait(&p->not_empty, &p->lock);
         if (p->count == 0 && !p->running) {
             pthread_mutex_unlock(&p->lock);
@@ -332,7 +333,20 @@ void pidvd_presenter_reset(pidvd_presenter_t *p)
     while (p->busy)
         pthread_cond_wait(&p->idle, &p->lock);
     p->head = p->tail = p->count = 0;
+    p->paused = false;
     pthread_cond_broadcast(&p->not_full);
+    pthread_cond_broadcast(&p->not_empty);
+    pthread_mutex_unlock(&p->lock);
+}
+
+/* Hold the currently displayed frame (KMS keeps scanning it out) and stop
+ * advancing, or release the hold. The present thread stops calling the
+ * presented callback while paused, so the av-sync clock freezes. */
+void pidvd_presenter_set_paused(pidvd_presenter_t *p, bool paused)
+{
+    pthread_mutex_lock(&p->lock);
+    p->paused = paused;
+    pthread_cond_broadcast(&p->not_empty);
     pthread_mutex_unlock(&p->lock);
 }
 

@@ -19,6 +19,11 @@ void pidvd_av_sync_free(pidvd_av_sync_t *s);
 /* Begin an unrelated PTS epoch (seek, branch, VTS or audio-stream change). */
 void pidvd_av_sync_reset(pidvd_av_sync_t *s, uint64_t epoch);
 
+/* Resume after a pause: keep the frozen display position but re-anchor the
+ * wall-clock references to now and drop servo windup, so the servo re-locks
+ * instead of railing on the elapsed pause. Preserves the startup barrier. */
+void pidvd_av_sync_resume(pidvd_av_sync_t *s, uint64_t epoch);
+
 /* Startup barrier. The first frame of an epoch waits briefly for PCM to be
  * primed, then starts even if audio is absent or failed. */
 void pidvd_av_sync_audio_ready(pidvd_av_sync_t *s, uint64_t epoch,

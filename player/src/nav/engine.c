@@ -79,6 +79,7 @@ struct engine {
     uint32_t spu_seen;      /* physical SPU substreams seen in this title */
     int sub_user;           /* -2 follow VM, -1 off, else chosen substream */
     int64_t sub_clear_ns;   /* monotonic deadline to clear the subtitle, 0=none */
+    bool paused;            /* nav-thread playback hold (PLAY/PAUSE) */
     long frames;
     /* producer timing */
     double t_prev, t_acc, t_max;
@@ -228,7 +229,10 @@ static void reset_audio_stream(struct engine *e)
 
 static void push_composed(struct engine *e)
 {
-    if (!e->have_frame)
+    /* Never feed the presenter while paused: it is intentionally not draining
+     * its ring, so a push (e.g. a menu highlight repush) would fill the ring
+     * and block the nav thread forever, deaf to the resume key. */
+    if (!e->have_frame || e->paused)
         return;
     pidvd_presenter_push(e->pres, e->fy, e->fu, e->fv, e->vw, e->vh,
                          e->tff, e->rff, e->pts, e->epoch);
@@ -740,6 +744,23 @@ static void cycle_audio(struct engine *e)
     osd_show(e, b);
 }
 
+/* Freeze or resume playback. Pause holds the displayed frame in the presenter
+ * (the KMS scanout keeps it on screen), which stops the av-sync clock, and
+ * drops audio output so sound stops promptly; the nav loop then parks polling
+ * input. Resume re-anchors the clock past the elapsed pause and lets the audio
+ * thread re-prime to the live display position. */
+static void set_paused(struct engine *e, bool paused)
+{
+    e->paused = paused;
+    if (paused) {
+        pidvd_presenter_set_paused(e->pres, true);
+        reset_audio_stream(e);
+    } else {
+        pidvd_av_sync_resume(e->sync, e->epoch);
+        pidvd_presenter_set_paused(e->pres, false);
+    }
+}
+
 static bool handle_key(struct engine *e, pidvd_key_t k)
 {
     pci_t *pci = dvdnav_get_current_nav_pci(e->nav);
@@ -766,6 +787,7 @@ static bool handle_key(struct engine *e, pidvd_key_t k)
     }
     case PIDVD_KEY_SUBTITLE: cycle_subtitle(e); break;
     case PIDVD_KEY_AUDIO:    cycle_audio(e); break;
+    case PIDVD_KEY_PLAY_PAUSE: set_paused(e, !e->paused); break;
     default: break;
     }
     if (k == PIDVD_KEY_UP || k == PIDVD_KEY_DOWN || k == PIDVD_KEY_LEFT
@@ -844,6 +866,24 @@ int pidvd_nav_play(const char *iso_path)
             if (k != PIDVD_KEY_NONE && !handle_key(&e, k))
                 break;
         }
+
+        /* Paused: hold here polling input (the presenter holds the frame and
+         * audio is stopped) until PLAY/PAUSE resumes or STOP ends playback.
+         * Only transport keys act while paused — other keys (nav/menu/AUDIO/
+         * SUB/VOL) are ignored, since the frozen presenter cannot render their
+         * feedback and a menu repush would wedge the nav thread. */
+        while (e.paused && running) {
+            pidvd_key_t k = pidvd_input_poll(e.input);
+            if ((k == PIDVD_KEY_PLAY_PAUSE || k == PIDVD_KEY_STOP)
+                && !handle_key(&e, k)) {
+                running = false;
+                break;
+            }
+            if (e.paused)
+                usleep(20000);
+        }
+        if (!running)
+            break;
 
         /* cache blocks avoid a per-sector memcpy out of dvdnav */
         uint8_t *blk = mem;

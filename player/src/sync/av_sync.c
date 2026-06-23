@@ -113,6 +113,25 @@ void pidvd_av_sync_reset(pidvd_av_sync_t *s, uint64_t epoch)
     pthread_mutex_unlock(&s->lock);
 }
 
+void pidvd_av_sync_resume(pidvd_av_sync_t *s, uint64_t epoch)
+{
+    pthread_mutex_lock(&s->lock);
+    if (s->epoch == epoch) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        int64_t now = (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+        /* display_pts stays where it froze; only the wall-clock anchors move
+         * forward so display_now/audio_correction do not add the pause gap. */
+        s->display_ns = now;
+        s->servo_ns = now;
+        s->servo_valid = false;   /* reseed filtered_error on first correction */
+        s->filtered_error = 0;
+        s->integral_error = 0;
+        s->correction_ppm = 0;
+    }
+    pthread_mutex_unlock(&s->lock);
+}
+
 void pidvd_av_sync_audio_ready(pidvd_av_sync_t *s, uint64_t epoch,
                                bool available)
 {
