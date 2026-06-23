@@ -9,6 +9,7 @@
 #include "platform/platform.h"
 #include "ui/catalog.h"
 #include "ui/render.h"
+#include "ui/saver.h"
 
 #define MEDIA_ROOT "/media/usb"
 #define MAX_VIEW 2048
@@ -119,6 +120,7 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
     bool autoplay_armed = (now_playing == NULL);
     int result = -1;
     ui_screen_t prev_screen = UI_ATTRACT;
+    unsigned idle = 0;   /* fields since the last input; arms the screensaver */
 
     while (result < 0) {
         /* mount state drives attract<->browse */
@@ -146,6 +148,23 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
         }
 
         pidvd_key_t k = pidvd_input_poll(in);
+
+        /* Idle screensaver. Any key resets the idle timer; if the saver is
+         * up, that first key only wakes it (consumed, not acted on) — then
+         * normal input resumes. It arms on any picker screen (ATTRACT,
+         * BROWSE, SETTINGS); waking returns to that same screen. */
+        if (k != PIDVD_KEY_NONE) {
+            idle = 0;
+            if (view.saver_active) {
+                view.saver_active = false;
+                k = PIDVD_KEY_NONE;
+            }
+        } else if (idle < PIDVD_SAVER_IDLE_FRAMES) {
+            idle++;
+        }
+        if (!view.saver_active && set->saver != PIDVD_SAVER_OFF
+            && idle >= PIDVD_SAVER_IDLE_FRAMES)
+            view.saver_active = true;
 
         if (view.screen == UI_SETTINGS) {
             switch (k) {

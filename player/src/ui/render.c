@@ -7,6 +7,7 @@
 #include <stdio.h>
 
 #include "ui/font8.h"
+#include "ui/saver.h"
 
 /* docs/UI.md §2 — AMBER & ICE, PHOSPHOR, VFD, MIDNIGHT, TERMINAL.
  * Columns: bg panel dim text bright hot bar bartxt */
@@ -777,6 +778,13 @@ void pidvd_ui_render(ui_canvas_t *c, const ui_view_t *v)
         ti = 0;
     const ui_theme_t *th = &pidvd_themes[ti];
     ui_fill(c, 0, 0, c->w, c->h, th->bg);
+
+    /* Idle screensaver paints over whatever screen is underneath; the run
+     * loop keeps that screen current so it's right the instant we wake. */
+    if (v->saver_active) {
+        pidvd_saver_render(c, th, v->set->saver, (unsigned)v->tick);
+        return;
+    }
 
     switch (v->screen) {
     case UI_ATTRACT:

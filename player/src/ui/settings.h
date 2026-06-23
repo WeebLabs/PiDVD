@@ -7,7 +7,7 @@
 #define PIDVD_UI_SETTINGS_H
 
 enum { UI_SET_THEME, UI_SET_LAYOUT, UI_SET_ADEV, UI_SET_VOL,
-       UI_SET_DIM, UI_SET_FILTER, UI_SET_RESCAN, UI_SET_ROWS };
+       UI_SET_DIM, UI_SET_SAVER, UI_SET_FILTER, UI_SET_RESCAN, UI_SET_ROWS };
 
 /* AUTO plus up to a handful of real output cards. */
 #define UI_AUDIO_DEV_MAX 6
@@ -17,6 +17,7 @@ typedef struct {
     int layout;       /* 0 console, 1 marquee, 2 ledger */
     int volume;       /* 0..100, applied to the output card's mixer (UAC) */
     int attract_dim;  /* 0 off, 1 5min, 2 15min, 3 30min */
+    int saver;        /* screensaver: 0 off, 1 warp starfield (PIDVD_SAVER_*) */
     int comp_filter;  /* 0 off..8: menu composite horizontal low-pass strength */
     char audio_dev[20]; /* selected output card id; "" = AUTO (USB->PWM) */
     /* The menu is always 240p NTSC; the disc's own standard drives
