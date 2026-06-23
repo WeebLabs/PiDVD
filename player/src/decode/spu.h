@@ -33,6 +33,11 @@ bool pidvd_spu_set_highlight(pidvd_spu_t *s, int sx, int sy, int ex,
 bool pidvd_spu_clear_highlight(pidvd_spu_t *s);
 void pidvd_spu_clear(pidvd_spu_t *s);
 
+/* True once per newly decoded overlay (consumes the flag); *dur_ticks gets the
+ * subtitle's explicit display duration in 90kHz ticks, or 0 if it carries no
+ * timed stop and the caller should apply its own fallback. */
+bool pidvd_spu_fresh(pidvd_spu_t *s, int64_t *dur_ticks);
+
 /* Current overlay, or false if nothing to show. */
 bool pidvd_spu_overlay(pidvd_spu_t *s, pidvd_overlay_t *out);
 

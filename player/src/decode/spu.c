@@ -25,6 +25,9 @@ struct pidvd_spu {
     uint32_t clut_rgba[16];      /* CLUT converted to RGB */
     uint8_t *rgba;
     bool dirty;
+    /* display timing */
+    int64_t dur_ticks;           /* explicit on-screen duration (90kHz), 0=none */
+    bool fresh;                   /* a new overlay was produced since last query */
 };
 
 pidvd_spu_t *pidvd_spu_new(void)
@@ -69,6 +72,7 @@ void pidvd_spu_select_stream(pidvd_spu_t *s, int substream)
         s->stream = substream;
         s->have = s->want = 0;
         s->visible = false;
+        s->fresh = false;
         s->dirty = true;
     }
 }
@@ -77,8 +81,20 @@ void pidvd_spu_clear(pidvd_spu_t *s)
 {
     s->have = s->want = 0;
     s->visible = false;
+    s->fresh = false;
     s->hl = false;
     s->dirty = true;
+}
+
+/* True once per newly decoded overlay; *dur_ticks gets its explicit display
+ * duration (90kHz ticks) or 0 if the subtitle carries no timed stop. */
+bool pidvd_spu_fresh(pidvd_spu_t *s, int64_t *dur_ticks)
+{
+    bool f = s->fresh;
+    s->fresh = false;
+    if (dur_ticks)
+        *dur_ticks = s->dur_ticks;
+    return f;
 }
 
 /* --- RLE ------------------------------------------------------------ */
@@ -133,70 +149,82 @@ static void parse_spu(pidvd_spu_t *s)
     size_t dcsq = ((size_t)s->buf[2] << 8) | s->buf[3];
     size_t rle0 = 0, rle1 = 0;
     bool show = false;
+    int start_date = 0, stop_date = -1;
 
-    /* execute the first control sequence (delay 0); later sequences
-     * carry timed stop commands — handled when the PTS clock exists.
-     * TODO(m3): honor SP_DCSQ delays for subtitle durations. */
-    if (dcsq + 4 > s->have)
-        return;
-    size_t p = dcsq + 4;          /* skip delay + next-offset */
-    bool done = false;
-    while (p < s->have && !done) {
-        switch (s->buf[p++]) {
-        case 0x00:                /* forced display (menus) */
-        case 0x01:                /* start display */
-            show = true;
+    /* Walk the whole display-control-sequence chain. The first sequence
+     * (delay 0) carries the palette/area/pixel setup and the start command;
+     * a later sequence carries the timed stop, whose date is the subtitle's
+     * on-screen duration. Each DCSQ is [date:2][next-offset:2][commands],
+     * the last pointing at itself. */
+    size_t q = dcsq;
+    for (int guard = 0; guard < 64; guard++) {
+        if (q + 4 > s->have)
             break;
-        case 0x02:                /* stop display */
-            show = false;
-            break;
-        case 0x03:                /* SET_COLOR */
-            if (p + 2 > s->have) return;
-            s->pal[3] = s->buf[p] >> 4;
-            s->pal[2] = s->buf[p] & 0xf;
-            s->pal[1] = s->buf[p + 1] >> 4;
-            s->pal[0] = s->buf[p + 1] & 0xf;
-            p += 2;
-            break;
-        case 0x04:                /* SET_CONTR (alpha) */
-            if (p + 2 > s->have) return;
-            s->alpha[3] = s->buf[p] >> 4;
-            s->alpha[2] = s->buf[p] & 0xf;
-            s->alpha[1] = s->buf[p + 1] >> 4;
-            s->alpha[0] = s->buf[p + 1] & 0xf;
-            p += 2;
-            break;
-        case 0x05: {              /* SET_DAREA */
-            if (p + 6 > s->have) return;
-            int x1 = (s->buf[p] << 4) | (s->buf[p + 1] >> 4);
-            int x2 = ((s->buf[p + 1] & 0xf) << 8) | s->buf[p + 2];
-            int y1 = (s->buf[p + 3] << 4) | (s->buf[p + 4] >> 4);
-            int y2 = ((s->buf[p + 4] & 0xf) << 8) | s->buf[p + 5];
-            s->x = x1; s->y = y1;
-            s->w = x2 - x1 + 1;
-            s->h = y2 - y1 + 1;
-            if (s->w > OVL_W) s->w = OVL_W;
-            if (s->h > OVL_H) s->h = OVL_H;
-            p += 6;
-            break;
+        int date = ((int)s->buf[q] << 8) | s->buf[q + 1];
+        size_t next = ((size_t)s->buf[q + 2] << 8) | s->buf[q + 3];
+        size_t p = q + 4;
+        bool done = false;
+        while (p < s->have && !done) {
+            switch (s->buf[p++]) {
+            case 0x00:                /* forced display (menus) */
+            case 0x01:                /* start display */
+                show = true;
+                start_date = date;
+                break;
+            case 0x02:                /* stop display (timed) */
+                stop_date = date;
+                break;
+            case 0x03:                /* SET_COLOR */
+                if (p + 2 > s->have) return;
+                s->pal[3] = s->buf[p] >> 4;
+                s->pal[2] = s->buf[p] & 0xf;
+                s->pal[1] = s->buf[p + 1] >> 4;
+                s->pal[0] = s->buf[p + 1] & 0xf;
+                p += 2;
+                break;
+            case 0x04:                /* SET_CONTR (alpha) */
+                if (p + 2 > s->have) return;
+                s->alpha[3] = s->buf[p] >> 4;
+                s->alpha[2] = s->buf[p] & 0xf;
+                s->alpha[1] = s->buf[p + 1] >> 4;
+                s->alpha[0] = s->buf[p + 1] & 0xf;
+                p += 2;
+                break;
+            case 0x05: {              /* SET_DAREA */
+                if (p + 6 > s->have) return;
+                int x1 = (s->buf[p] << 4) | (s->buf[p + 1] >> 4);
+                int x2 = ((s->buf[p + 1] & 0xf) << 8) | s->buf[p + 2];
+                int y1 = (s->buf[p + 3] << 4) | (s->buf[p + 4] >> 4);
+                int y2 = ((s->buf[p + 4] & 0xf) << 8) | s->buf[p + 5];
+                s->x = x1; s->y = y1;
+                s->w = x2 - x1 + 1;
+                s->h = y2 - y1 + 1;
+                if (s->w > OVL_W) s->w = OVL_W;
+                if (s->h > OVL_H) s->h = OVL_H;
+                p += 6;
+                break;
+            }
+            case 0x06:                /* SET_DSPXA */
+                if (p + 4 > s->have) return;
+                rle0 = ((size_t)s->buf[p] << 8) | s->buf[p + 1];
+                rle1 = ((size_t)s->buf[p + 2] << 8) | s->buf[p + 3];
+                p += 4;
+                break;
+            case 0x07:                /* CHG_COLCON — rare, skip payload */
+                if (p + 2 > s->have) return;
+                p += (((size_t)s->buf[p] << 8) | s->buf[p + 1]) - 1;
+                break;
+            case 0xff:
+                done = true;
+                break;
+            default:
+                done = true;
+                break;
+            }
         }
-        case 0x06:                /* SET_DSPXA */
-            if (p + 4 > s->have) return;
-            rle0 = ((size_t)s->buf[p] << 8) | s->buf[p + 1];
-            rle1 = ((size_t)s->buf[p + 2] << 8) | s->buf[p + 3];
-            p += 4;
-            break;
-        case 0x07:                /* CHG_COLCON — rare, skip payload */
-            if (p + 2 > s->have) return;
-            p += (((size_t)s->buf[p] << 8) | s->buf[p + 1]) - 1;
-            break;
-        case 0xff:
-            done = true;
-            break;
-        default:
-            done = true;
-            break;
-        }
+        if (next == q || next < dcsq || next + 4 > s->have)
+            break;            /* last DCSQ points at itself */
+        q = next;
     }
 
     if (s->w > 0 && s->h > 0 && rle0 && rle1) {
@@ -204,6 +232,10 @@ static void parse_spu(pidvd_spu_t *s)
         decode_field(s, rle0, 0);
         decode_field(s, rle1, 1);
         s->visible = show;
+        /* DCSQ date unit is 1024/90000 s; duration is stop minus start. */
+        s->dur_ticks = (stop_date >= 0)
+            ? (int64_t)(stop_date - start_date) * 1024 : 0;
+        s->fresh = show;
         s->dirty = true;
     }
 }

@@ -77,6 +77,7 @@ struct engine {
     pidvd_disc_t *disc;     /* IFO model for subtitle-track enumeration */
     uint32_t spu_seen;      /* physical SPU substreams seen in this title */
     int sub_user;           /* -2 follow VM, -1 off, else chosen substream */
+    int64_t sub_clear_ns;   /* monotonic deadline to clear the subtitle, 0=none */
     long frames;
     /* producer timing */
     double t_prev, t_acc, t_max;
@@ -88,6 +89,16 @@ struct engine {
 
 /* Frames a volume change stays on screen (~1.5 s at the field-paced rate). */
 #define OSD_FRAMES 48
+
+/* Subtitle fallback: clear after this long if it carries no explicit stop. */
+#define SUB_FALLBACK_NS (8LL * 1000000000LL)
+
+static int64_t mono_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
 
 /* Transient corner chip, top-right. sy even keeps every edge interlace-safe
  * (draw.h interlace law); drawn straight into the XRGB frame the presenter is
@@ -119,6 +130,10 @@ static void blend_overlay(void *opaque, uint8_t *rgb, int w, int h)
     struct engine *e = opaque;
     pidvd_overlay_t ovl;
     pthread_mutex_lock(&e->spu_lock);
+    if (e->sub_clear_ns && mono_ns() >= e->sub_clear_ns) {
+        pidvd_spu_clear(e->spu);   /* duration elapsed with no successor */
+        e->sub_clear_ns = 0;
+    }
     if (pidvd_spu_overlay(e->spu, &ovl)) {
         /* clip once; transparent skipped, opaque copied, the rare
          * translucent pixels blended without division */
@@ -198,6 +213,7 @@ static void reset_stream_epoch(struct engine *e)
     e->have_frame = false;
     e->sub_user = -2;      /* new title: follow the VM until the user picks */
     e->spu_seen = 0;       /* re-discover this title's subtitle tracks */
+    e->sub_clear_ns = 0;   /* drop any pending subtitle-clear deadline */
     pidvd_av_sync_reset(e->sync, epoch);
     pidvd_presenter_reset(e->pres);
 }
@@ -301,11 +317,21 @@ static void on_spu_es(void *opaque, int substream, const uint8_t *data,
                       size_t len, int64_t pts)
 {
     struct engine *e = opaque;
-    (void)pts;   /* SPU display timing: with the A/V clock, later */
-    if (substream >= 0 && substream < 32 && dvdnav_is_domain_vts(e->nav))
+    (void)pts;   /* duration comes from the SPU's own DCSQ, not this PES pts */
+    bool vts = dvdnav_is_domain_vts(e->nav);
+    if (substream >= 0 && substream < 32 && vts)
         e->spu_seen |= 1u << substream;   /* a real subtitle track exists */
     pthread_mutex_lock(&e->spu_lock);
     pidvd_spu_packet(e->spu, substream, data, len);
+    int64_t dur = 0;
+    if (pidvd_spu_fresh(e->spu, &dur)) {
+        /* A subtitle: clear it after its own duration (or the fallback). A menu
+         * graphic (not a title): cancel any pending subtitle timeout so the
+         * menu is never wiped. */
+        e->sub_clear_ns = vts
+            ? mono_ns() + (dur > 0 ? dur * 1000000000LL / 90000 : SUB_FALLBACK_NS)
+            : 0;
+    }
     pthread_mutex_unlock(&e->spu_lock);
 }
 
