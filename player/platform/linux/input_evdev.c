@@ -18,6 +18,8 @@ struct pidvd_input {
     int fd[MAX_DEVS];
     int n;
     int ctl;               /* named-pipe remote control */
+    char cbuf[128];        /* unconsumed FIFO bytes (one line drained per poll) */
+    int clen;
 };
 
 pidvd_input_t *pidvd_input_open(void)
@@ -93,15 +95,31 @@ static pidvd_key_t map_key(unsigned code)
 pidvd_key_t pidvd_input_poll(pidvd_input_t *in)
 {
     if (in->ctl >= 0) {
-        char line[32];
-        ssize_t r = read(in->ctl, line, sizeof(line) - 1);
-        if (r > 0) {
-            while (r > 0 && (line[r - 1] == '\n' || line[r - 1] == '\r'))
-                r--;
-            line[r] = 0;
-            pidvd_key_t k = map_word(line);
+        /* Drain the FIFO one line per poll. Several words can arrive queued
+         * (keys pressed faster than the loop polls, e.g. while a menu is still
+         * loading); reading them all at once and mapping the blob would match
+         * nothing and silently drop every press. Buffer the bytes and consume a
+         * single newline-terminated word each call so every key registers. */
+        if (in->clen < (int)sizeof(in->cbuf) - 1) {
+            ssize_t r = read(in->ctl, in->cbuf + in->clen,
+                             sizeof(in->cbuf) - 1 - in->clen);
+            if (r > 0)
+                in->clen += (int)r;
+        }
+        char *nl = memchr(in->cbuf, '\n', in->clen);
+        if (nl) {
+            char *end = nl;
+            *end = 0;
+            while (end > in->cbuf && (end[-1] == '\r' || end[-1] == ' '))
+                *--end = 0;
+            pidvd_key_t k = map_word(in->cbuf);
+            int consumed = (int)(nl - in->cbuf) + 1;
+            memmove(in->cbuf, in->cbuf + consumed, in->clen - consumed);
+            in->clen -= consumed;
             if (k != PIDVD_KEY_NONE)
                 return k;
+        } else if (in->clen >= (int)sizeof(in->cbuf) - 1) {
+            in->clen = 0;   /* a full buffer with no newline is junk; drop it */
         }
     }
 
