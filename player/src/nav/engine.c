@@ -761,6 +761,24 @@ static void set_paused(struct engine *e, bool paused)
     }
 }
 
+/* Brief "T1 CH 3/26" indicator after a chapter/title jump. Title domain only. */
+static void show_chapter_osd(struct engine *e)
+{
+    if (!dvdnav_is_domain_vts(e->nav))
+        return;
+    int32_t title = 0, part = 0, parts = 0;
+    if (dvdnav_current_title_info(e->nav, &title, &part) != DVDNAV_STATUS_OK
+        || title < 1)
+        return;
+    char b[16];
+    if (dvdnav_get_number_of_parts(e->nav, title, &parts) == DVDNAV_STATUS_OK
+        && parts > 0)
+        snprintf(b, sizeof(b), "T%d CH %d/%d", title, part, parts);
+    else
+        snprintf(b, sizeof(b), "T%d CH %d", title, part);
+    osd_show(e, b);
+}
+
 static bool handle_key(struct engine *e, pidvd_key_t k)
 {
     pci_t *pci = dvdnav_get_current_nav_pci(e->nav);
@@ -773,8 +791,10 @@ static bool handle_key(struct engine *e, pidvd_key_t k)
     case PIDVD_KEY_MENU:   dvdnav_menu_call(e->nav, DVD_MENU_Escape);
                            dvdnav_menu_call(e->nav, DVD_MENU_Root); break;
     case PIDVD_KEY_TITLE:  dvdnav_menu_call(e->nav, DVD_MENU_Title); break;
-    case PIDVD_KEY_NEXT_CHAPTER: dvdnav_next_pg_search(e->nav);     break;
-    case PIDVD_KEY_PREV_CHAPTER: dvdnav_prev_pg_search(e->nav);     break;
+    case PIDVD_KEY_NEXT_CHAPTER: dvdnav_next_pg_search(e->nav);
+                                 show_chapter_osd(e); break;
+    case PIDVD_KEY_PREV_CHAPTER: dvdnav_prev_pg_search(e->nav);
+                                 show_chapter_osd(e); break;
     case PIDVD_KEY_STOP:   return false;
     case PIDVD_KEY_FIELD:  pidvd_video_toggle_field_parity(e->video); break;
     case PIDVD_KEY_VOL_UP:
