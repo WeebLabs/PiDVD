@@ -80,6 +80,10 @@ struct engine {
     int sub_user;           /* -2 follow VM, -1 off, else chosen substream */
     int64_t sub_clear_ns;   /* monotonic deadline to clear the subtitle, 0=none */
     bool paused;            /* nav-thread playback hold (PLAY/PAUSE) */
+    bool seek_pending;      /* resume: do the seek on the next NAV_PACKET */
+    uint32_t seek_sector;   /* resume: target sector */
+    int32_t pos_title;      /* last in-title position, for resume capture */
+    uint32_t pos_sector, pos_len;
     long frames;
     /* producer timing */
     double t_prev, t_acc, t_max;
@@ -624,21 +628,28 @@ static void update_highlight(struct engine *e, bool repush)
 
 /* ---- input ------------------------------------------------------------ */
 
-/* The IFO title record dvdnav is currently playing, or NULL. */
-static const pidvd_title_t *cur_title(struct engine *e)
+/* The IFO title record with the given disc-wide number, or NULL. */
+static const pidvd_title_t *disc_title_by_nr(pidvd_disc_t *d, int nr)
 {
-    if (!e->disc)
+    if (!d)
         return NULL;
-    int32_t title = 0, part = 0;
-    if (dvdnav_current_title_info(e->nav, &title, &part) != DVDNAV_STATUS_OK
-        || title < 1)
-        return NULL;
-    for (int i = 0; i < pidvd_disc_title_count(e->disc); i++) {
-        const pidvd_title_t *t = pidvd_disc_title(e->disc, i);
-        if (t->title_nr == title)
+    for (int i = 0; i < pidvd_disc_title_count(d); i++) {
+        const pidvd_title_t *t = pidvd_disc_title(d, i);
+        if (t->title_nr == nr)
             return t;
     }
     return NULL;
+}
+
+/* The IFO title record dvdnav is currently playing, or NULL. */
+static const pidvd_title_t *cur_title(struct engine *e)
+{
+    int32_t title = 0, part = 0;
+    if (!e->disc
+        || dvdnav_current_title_info(e->nav, &title, &part) != DVDNAV_STATUS_OK
+        || title < 1)
+        return NULL;
+    return disc_title_by_nr(e->disc, title);
 }
 
 /* Cycle the subtitle over this title's tracks: off -> 1 -> 2 -> ... -> off.
@@ -818,7 +829,7 @@ static bool handle_key(struct engine *e, pidvd_key_t k)
 
 /* ---- engine ------------------------------------------------------------ */
 
-int pidvd_nav_play(const char *iso_path)
+int pidvd_nav_play(const char *iso_path, pidvd_resume_t *resume)
 {
     struct engine e = { 0 };
     uint8_t mem[DVD_VIDEO_LB_LEN];
@@ -829,6 +840,14 @@ int pidvd_nav_play(const char *iso_path)
     }
     dvdnav_set_readahead_flag(e.nav, 1);
     dvdnav_set_PGC_positioning_flag(e.nav, 1);
+    /* Resume: enter the saved title now; the sector seek must wait until the
+     * title is actually playing (the VM rejects it before then), so it is
+     * deferred to the first NAV_PACKET below. */
+    if (resume && resume->restore && resume->title >= 1) {
+        dvdnav_title_play(e.nav, resume->title);
+        e.seek_pending = true;
+        e.seek_sector = resume->sector;
+    }
     /* IFO model alongside dvdnav, for up-front subtitle-track enumeration
      * (non-fatal: cycle_subtitle falls back to seen substreams without it). */
     e.disc = pidvd_disc_open(iso_path);
@@ -973,6 +992,21 @@ int pidvd_nav_play(const char *iso_path)
             break;
         case DVDNAV_NAV_PACKET:
             update_highlight(&e, false);
+            if (e.seek_pending) {
+                e.seek_pending = false;
+                dvdnav_sector_search(e.nav, e.seek_sector, SEEK_SET);
+            }
+            /* Track the live in-title position so a STOP can be resumed. Only
+             * in the title domain — menu positions are not resume points. */
+            if (dvdnav_is_domain_vts(e.nav)) {
+                uint32_t pos = 0, len = 0; int32_t ti = 0, pt = 0;
+                if (dvdnav_get_position(e.nav, &pos, &len) == DVDNAV_STATUS_OK
+                    && len > 0
+                    && dvdnav_current_title_info(e.nav, &ti, &pt)
+                       == DVDNAV_STATUS_OK && ti >= 1) {
+                    e.pos_title = ti; e.pos_sector = pos; e.pos_len = len;
+                }
+            }
             break;
         case DVDNAV_VTS_CHANGE: {
             pidvd_vdec_reset(e.vdec);
@@ -1042,6 +1076,22 @@ int pidvd_nav_play(const char *iso_path)
     free(e.fy);
     free(e.fu);
     free(e.fv);
+    /* Hand the last in-title position back for persistence (seconds derived
+     * from the sector fraction of the title's IFO duration, for display). */
+    if (resume) {
+        resume->captured = false;
+        /* Skip the last 2%: a disc watched to the end resumes from the start. */
+        if (e.pos_len > 0 && e.pos_title >= 1
+            && (uint64_t)e.pos_sector * 50 < (uint64_t)e.pos_len * 49) {
+            const pidvd_title_t *t = disc_title_by_nr(e.disc, e.pos_title);
+            int dur = t ? (int)t->seconds : 0;
+            resume->title = e.pos_title;
+            resume->sector = e.pos_sector;
+            resume->seconds = dur > 0
+                ? (int)((double)e.pos_sector / e.pos_len * dur) : 0;
+            resume->captured = true;
+        }
+    }
     if (e.disc)
         pidvd_disc_close(e.disc);
     dvdnav_close(e.nav);

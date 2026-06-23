@@ -24,6 +24,9 @@ typedef struct {
      * playback. last_* are kept for the NOW PLAYING resume shelf. */
     char last_disc[512];
     int last_standard; /* pidvd_standard_t of the last played disc */
+    int last_title;    /* resume point in last_disc: title / sector / seconds */
+    int last_sector;
+    int last_seconds;
 
     /* Runtime audio-device list, filled by the platform each time the menu
      * opens (not persisted). Index 0 is always AUTO; 1.. are real cards. */

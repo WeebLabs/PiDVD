@@ -8,6 +8,7 @@
 
 #include "platform/platform.h"
 #include "ui/catalog.h"
+#include "ui/draw.h"
 #include "ui/render.h"
 #include "ui/saver.h"
 
@@ -81,9 +82,47 @@ static void present(vout_t *vo, const ui_view_t *view)
     pidvd_video_present(vo->video, f, true, false, NULL);
 }
 
-int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
-                      char *iso_out, size_t cap)
+/* Resume prompt overlaid on the browse screen. sel: 0 = RESUME, 1 = START OVER.
+ * Rendered straight with draw.h (sy even per the interlace law). */
+static void present_prompt(vout_t *vo, const ui_view_t *view, int seconds,
+                           int sel)
 {
+    pidvd_frame_t *f = pidvd_video_begin_frame(vo->video);
+    if (!f)
+        return;
+    ui_canvas_t c = { f->pixels, f->width, f->height, f->stride };
+    pidvd_ui_render(&c, view);
+
+    int bw = 460, bh = 160;
+    int bx = (c.w - bw) / 2, by = (c.h - bh) / 2;
+    bx &= ~1; by &= ~1;
+    ui_fill(&c, bx, by, bw, bh, 0x101010);
+    ui_hline2(&c, bx, by, bw, 0xffa000);
+    ui_hline2(&c, bx, by + bh - 2, bw, 0xffa000);
+    ui_text(&c, bx + 28, by + 22, 2, 4, 0xf4efe2, "RESUME PLAYBACK?");
+
+    char r[32];
+    int s = seconds;
+    if (s >= 3600)
+        snprintf(r, sizeof(r), "RESUME  %d:%02d:%02d", s / 3600, (s / 60) % 60,
+                 s % 60);
+    else
+        snprintf(r, sizeof(r), "RESUME  %d:%02d", s / 60, s % 60);
+
+    int oy0 = by + 78, oy1 = by + 116;
+    ui_fill(&c, bx + 18, (sel ? oy1 : oy0) - 6, bw - 36, 32, 0x3a2a00);
+    ui_text(&c, bx + 30, oy0, 2, 4, sel == 0 ? 0xffa000 : 0x8a7a50, r);
+    ui_text(&c, bx + 30, oy1, 2, 4, sel == 1 ? 0xffa000 : 0x8a7a50,
+            "START OVER");
+
+    pidvd_video_present(vo->video, f, true, false, NULL);
+}
+
+int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
+                      char *iso_out, size_t cap, int *resume_out)
+{
+    if (resume_out)
+        *resume_out = 0;
     vout_t vo;
     vo.video = pidvd_video_open_mode(MENU_STD, PIDVD_SCAN_PROGRESSIVE);
     if (!vo.video)
@@ -121,6 +160,8 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
     int result = -1;
     ui_screen_t prev_screen = UI_ATTRACT;
     unsigned idle = 0;   /* fields since the last input; arms the screensaver */
+    bool prompting = false;   /* resume prompt over the browse screen */
+    int prompt_sel = 0;       /* 0 = RESUME, 1 = START OVER */
 
     while (result < 0) {
         /* mount state drives attract<->browse */
@@ -166,7 +207,28 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
             && idle >= PIDVD_SAVER_IDLE_FRAMES)
             view.saver_active = true;
 
-        if (view.screen == UI_SETTINGS) {
+        if (prompting) {
+            switch (k) {
+            case PIDVD_KEY_UP:
+            case PIDVD_KEY_DOWN:
+            case PIDVD_KEY_LEFT:
+            case PIDVD_KEY_RIGHT:
+                prompt_sel ^= 1;
+                break;
+            case PIDVD_KEY_ENTER:
+            case PIDVD_KEY_PLAY_PAUSE:
+                if (resume_out)
+                    *resume_out = (prompt_sel == 0);
+                result = 0;   /* iso_out already holds the chosen disc */
+                break;
+            case PIDVD_KEY_STOP:
+            case PIDVD_KEY_MENU:
+                prompting = false;   /* cancel; back to the list */
+                break;
+            default:
+                break;
+            }
+        } else if (view.screen == UI_SETTINGS) {
             switch (k) {
             case PIDVD_KEY_UP:
                 view.set_sel = (view.set_sel + UI_SET_ROWS - 1) % UI_SET_ROWS;
@@ -247,7 +309,14 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
                     catalog_enter(cat, view.sel);
                     view.sel = view.scroll = 0;
                 } else if (e) {
-                    result = 0;
+                    /* A saved resume point for this disc -> prompt first. */
+                    if (set->last_title >= 1 && set->last_seconds > 30
+                        && !strcmp(iso_out, set->last_disc)) {
+                        prompting = true;
+                        prompt_sel = 0;
+                    } else {
+                        result = 0;
+                    }
                 }
                 break;
             }
@@ -306,7 +375,10 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
             view.at_root = catalog_at_root(cat);
             view.path = catalog_cwd(cat);
             view.scanning = catalog_scanning(cat);
-            present(&vo, &view);
+            if (prompting)
+                present_prompt(&vo, &view, set->last_seconds, prompt_sel);
+            else
+                present(&vo, &view);
             catalog_unlock(cat);
         } else {
             view.items = NULL;

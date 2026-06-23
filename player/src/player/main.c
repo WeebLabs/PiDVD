@@ -39,7 +39,7 @@ static int play_once(const char *path)
            pidvd_disc_volume_id(d), pidvd_disc_title_count(d),
            pidvd_standard_name(std), mixed ? " (mixed-standard disc)" : "");
     pidvd_disc_close(d);   /* info printed; dvdnav reopens the ISO */
-    return pidvd_nav_play(path);
+    return pidvd_nav_play(path, NULL);
 }
 
 static int ui_main(void)
@@ -51,8 +51,19 @@ static int ui_main(void)
     const char *now_name = NULL;
 
     for (;;) {
-        if (pidvd_picker_main(&set, now_name, iso, sizeof(iso)) != 0)
+        int resume_choice = 0;
+        if (pidvd_picker_main(&set, now_name, iso, sizeof(iso),
+                              &resume_choice) != 0)
             return 1;
+
+        /* Resume only when the picker offered it for this same disc. */
+        pidvd_resume_t rz = { 0 };
+        if (resume_choice && set.last_title >= 1
+            && !strcmp(iso, set.last_disc)) {
+            rz.restore = true;
+            rz.title = set.last_title;
+            rz.sector = (uint32_t)set.last_sector;
+        }
 
         pidvd_disc_t *d = pidvd_disc_open(iso);
         if (d) {
@@ -61,14 +72,23 @@ static int ui_main(void)
                 pidvd_disc_standard(d, &mixed) == PIDVD_STD_PAL;
             pidvd_disc_close(d);
         }
+        if (strcmp(iso, set.last_disc) != 0)   /* a different disc: drop resume */
+            set.last_title = set.last_sector = set.last_seconds = 0;
         snprintf(set.last_disc, sizeof(set.last_disc), "%s", iso);
         ui_settings_save(&set);
 
         display_name(iso, now_buf, sizeof(now_buf));
         printf("pidvd: playing %s\n", iso);
         pidvd_audio_configure(set.audio_dev, set.volume);
-        pidvd_nav_play(iso);
+        pidvd_nav_play(iso, &rz);
         set.volume = pidvd_audio_volume();   /* keep a live in-playback change */
+        if (rz.captured) {                   /* remember where we stopped */
+            set.last_title = rz.title;
+            set.last_sector = (int)rz.sector;
+            set.last_seconds = rz.seconds;
+        } else {                             /* finished/none: clear resume */
+            set.last_title = set.last_sector = set.last_seconds = 0;
+        }
         ui_settings_save(&set);
         now_name = now_buf;
     }

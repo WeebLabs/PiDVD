@@ -170,6 +170,9 @@ void ui_settings_load(ui_settings_t *s)
             else if (!strcmp(line, "last_std")) s->last_standard = atoi(v) & 1;
             else if (!strcmp(line, "last_disc"))
                 snprintf(s->last_disc, sizeof(s->last_disc), "%s", v);
+            else if (!strcmp(line, "last_title"))   s->last_title = atoi(v);
+            else if (!strcmp(line, "last_sector"))  s->last_sector = atoi(v);
+            else if (!strcmp(line, "last_seconds")) s->last_seconds = atoi(v);
         }
         fclose(f);
     }
@@ -187,10 +190,12 @@ void ui_settings_save(const ui_settings_t *s)
     FILE *f = fopen(path, "w");
     if (f) {
         fprintf(f, "theme=%d\nlayout=%d\nvolume=%d\nadev=%s\ndim=%d\n"
-                   "saver=%d\nfilter=%d\nlast_std=%d\nlast_disc=%s\n",
+                   "saver=%d\nfilter=%d\nlast_std=%d\nlast_disc=%s\n"
+                   "last_title=%d\nlast_sector=%d\nlast_seconds=%d\n",
                 s->theme, s->layout, s->volume, s->audio_dev,
                 s->attract_dim, s->saver, s->comp_filter,
-                s->last_standard, s->last_disc);
+                s->last_standard, s->last_disc,
+                s->last_title, s->last_sector, s->last_seconds);
         fclose(f);
     }
     if (mnt) {

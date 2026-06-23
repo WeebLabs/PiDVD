@@ -13,8 +13,10 @@
 /* Blocks through attract/browse/settings until the user picks a disc.
  * iso_out receives the absolute path. now_playing (may be NULL) is the
  * display name of the last played disc for the shelf; if the user asks
- * to resume it, iso_out receives set->last_disc instead. Returns 0. */
+ * to resume it, iso_out receives set->last_disc instead. When the chosen disc
+ * has a saved resume point (set->last_disc/last_seconds), a prompt is shown and
+ * *resume_out is set to 1 (resume) or 0 (start over); 0 otherwise. Returns 0. */
 int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
-                      char *iso_out, size_t cap);
+                      char *iso_out, size_t cap, int *resume_out);
 
 #endif
