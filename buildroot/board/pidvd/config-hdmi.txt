@@ -1,0 +1,15 @@
+# HDMI 480i/576i route (milestone-3 alt): RGB CRT via HDMI -> HDMI-VGA ->
+# UMSA -> SCART, instead of the DPI/VGA666 DAC (whose kernel bring-up hangs).
+# HDMI is the Pi's primary, reliable output, does interlaced CEA modes
+# natively (no patch/module/overlay), and leaves GPIO 14/15 free so the serial
+# console + network stay alive for debugging. NOT the shipped default yet.
+kernel=zImage
+enable_uart=1
+disable_overscan=1
+disable_splash=1
+boot_delay=0
+dtoverlay=vc4-kms-v3d
+hdmi_force_hotplug=1
+config_hdmi_boost=5
+gpu_mem=64
+dtparam=audio=on

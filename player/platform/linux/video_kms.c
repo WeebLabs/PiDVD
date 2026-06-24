@@ -37,6 +37,7 @@ struct pidvd_video {
     unsigned hfilter;        /* menu composite horizontal low-pass: 0=off..3 */
     bool no_pulldown;        /* PIDVD_NO_PULLDOWN: force 2 fields/frame (kill switch) */
     bool progressive;        /* 240p/288p menu mode (decimated scanout) */
+    bool is_dpi;             /* output is the rpi-dpidac VGA666 bridge, not the VEC */
     pidvd_standard_t std;    /* drives the VEC composite norm (NTSC/PAL) */
     drmModeModeInfo mode;
     struct kms_buf buf[2];
@@ -72,25 +73,38 @@ static int create_buf(int fd, int w, int h, struct kms_buf *b)
     return 0;
 }
 
-static bool composite_usable(const drmModeConnector *c)
+static bool connector_usable(const drmModeConnector *c)
 {
     /* vc4's composite connector cannot hotplug-detect a CRT, so the kernel
-     * reports UNKNOWN unless a video=...:e boot arg forced it on. Treat both
-     * as usable; DISCONNECTED is the only hard no. */
-    return c->connector_type == DRM_MODE_CONNECTOR_Composite
+     * reports UNKNOWN unless a video=...:e boot arg forced it on. The
+     * rpi-dpidac VGA666 bridge reports CONNECTED. HDMI (for the HDMI->VGA->
+     * SCART route) reports CONNECTED through the converter. Accept all three;
+     * DISCONNECTED is the only hard no. */
+    return (c->connector_type == DRM_MODE_CONNECTOR_Composite
+            || c->connector_type == DRM_MODE_CONNECTOR_VGA
+            || c->connector_type == DRM_MODE_CONNECTOR_HDMIA)
         && c->connection != DRM_MODE_DISCONNECTED;
 }
 
-static bool mode_matches(pidvd_standard_t std, bool progressive,
+static bool mode_matches(pidvd_standard_t std, bool progressive, bool dpi,
                          const drmModeModeInfo *mi)
 {
     int want_v = progressive ? ((std == PIDVD_STD_PAL) ? 288 : 240)
                              : ((std == PIDVD_STD_PAL) ? 576 : 480);
+    bool mi_int = (mi->flags & DRM_MODE_FLAG_INTERLACE) != 0;
+
+    if (dpi) {
+        /* rpi-dpidac modes come from /boot/timings.txt with their own pixel
+         * clock and blanking, so match only on scan + active size. The 720-
+         * wide 480i/576i modes map 1:1 to DVD; 240p/288p are narrower and are
+         * not selected here (interlaced is the DPI target). */
+        return !progressive && mi_int
+            && mi->hdisplay == 720 && mi->vdisplay == want_v;
+    }
+
     int want_htotal = (std == PIDVD_STD_PAL) ? 864 : 858;
     int want_vtotal = progressive ? ((std == PIDVD_STD_PAL) ? 312 : 262)
                                   : ((std == PIDVD_STD_PAL) ? 625 : 525);
-    bool mi_int = (mi->flags & DRM_MODE_FLAG_INTERLACE) != 0;
-
     return mi_int == !progressive
         && mi->hdisplay == 720
         && mi->vdisplay == want_v
@@ -134,6 +148,50 @@ static bool choose_crtc(pidvd_video_t *v, drmModeRes *res,
     return false;
 }
 
+/* TV-timed HDMI modes for the HDMI->VGA->SCART route. Converters advertise only
+ * progressive PC modes in EDID, so we command the timing directly. All carry
+ * DRM_MODE_FLAG_DBLCLK so the vc4 HDMI encoder pixel-doubles (13.5 MHz pixel ->
+ * 27 MHz TMDS), the only way these 15 kHz signals are legal over HDMI.
+ * Interlaced 480i/576i match drm's edid_cea_modes[] (VIC 6 / 21); progressive
+ * 240p/288p are the same line rate with half the vertical (no CEA equivalent)
+ * for a flicker-free menu, mirroring the VEC's progressive menu mode. */
+static const drmModeModeInfo *hdmi_tv_mode(pidvd_standard_t std, bool progressive)
+{
+    static const drmModeModeInfo m480i = {
+        .clock = 13500,
+        .hdisplay = 720, .hsync_start = 739, .hsync_end = 801, .htotal = 858,
+        .vdisplay = 480, .vsync_start = 488, .vsync_end = 494, .vtotal = 525,
+        .vrefresh = 60, .type = DRM_MODE_TYPE_DRIVER, .name = "720x480i",
+        .flags = DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC
+               | DRM_MODE_FLAG_INTERLACE | DRM_MODE_FLAG_DBLCLK,
+    };
+    static const drmModeModeInfo m576i = {
+        .clock = 13500,
+        .hdisplay = 720, .hsync_start = 732, .hsync_end = 795, .htotal = 864,
+        .vdisplay = 576, .vsync_start = 580, .vsync_end = 586, .vtotal = 625,
+        .vrefresh = 50, .type = DRM_MODE_TYPE_DRIVER, .name = "720x576i",
+        .flags = DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC
+               | DRM_MODE_FLAG_INTERLACE | DRM_MODE_FLAG_DBLCLK,
+    };
+    static const drmModeModeInfo m240p = {
+        .clock = 13500,
+        .hdisplay = 720, .hsync_start = 739, .hsync_end = 801, .htotal = 858,
+        .vdisplay = 240, .vsync_start = 244, .vsync_end = 247, .vtotal = 262,
+        .vrefresh = 60, .type = DRM_MODE_TYPE_DRIVER, .name = "720x240",
+        .flags = DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC | DRM_MODE_FLAG_DBLCLK,
+    };
+    static const drmModeModeInfo m288p = {
+        .clock = 13500,
+        .hdisplay = 720, .hsync_start = 732, .hsync_end = 795, .htotal = 864,
+        .vdisplay = 288, .vsync_start = 290, .vsync_end = 293, .vtotal = 312,
+        .vrefresh = 50, .type = DRM_MODE_TYPE_DRIVER, .name = "720x288",
+        .flags = DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC | DRM_MODE_FLAG_DBLCLK,
+    };
+    if (progressive)
+        return (std == PIDVD_STD_PAL) ? &m288p : &m240p;
+    return (std == PIDVD_STD_PAL) ? &m576i : &m480i;
+}
+
 /* Find a Composite mode for the requested standard and scan. Interlaced:
  * 480i/576i. Progressive: 240p/288p (half the active lines, no interlace
  * flag). Sets v->mode/conn/crtc on success. */
@@ -147,16 +205,32 @@ static bool pick_mode(pidvd_video_t *v, pidvd_standard_t std, bool progressive)
         drmModeConnector *c = drmModeGetConnector(v->fd, res->connectors[i]);
         if (!c)
             continue;
-        if (composite_usable(c)) {
-            for (int m = 0; m < c->count_modes; m++) {
-                drmModeModeInfo *mi = &c->modes[m];
-                if (mode_matches(std, progressive, mi)) {
-                    v->conn_id = c->connector_id;
-                    if (!choose_crtc(v, res, c))
-                        continue;
-                    v->mode = *mi;
+        if (connector_usable(c)) {
+            bool hdmi = (c->connector_type == DRM_MODE_CONNECTOR_HDMIA);
+            bool dpi = (c->connector_type == DRM_MODE_CONNECTOR_VGA);
+            if (hdmi) {
+                /* HDMI->VGA/SCART converters expose only progressive PC modes,
+                 * so command the TV timing directly: 240p/288p for the menu,
+                 * 480i/576i for playback (same 15 kHz line rate, pixel-doubled
+                 * to a legal HDMI TMDS clock). */
+                v->conn_id = c->connector_id;
+                v->is_dpi = true;   /* no VEC "TV mode" on HDMI */
+                if (choose_crtc(v, res, c)) {
+                    v->mode = *hdmi_tv_mode(std, progressive);
                     found = true;
-                    break;
+                }
+            } else {
+                for (int m = 0; m < c->count_modes; m++) {
+                    drmModeModeInfo *mi = &c->modes[m];
+                    if (mode_matches(std, progressive, dpi, mi)) {
+                        v->conn_id = c->connector_id;
+                        v->is_dpi = dpi;
+                        if (!choose_crtc(v, res, c))
+                            continue;
+                        v->mode = *mi;
+                        found = true;
+                        break;
+                    }
                 }
             }
         }
@@ -252,7 +326,11 @@ static bool commit_mode(pidvd_video_t *v)
 {
     const char *norm = (v->std == PIDVD_STD_PAL) ? "PAL" : "NTSC";
     uint32_t cP = prop_id(v->fd, v->conn_id, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID");
-    uint32_t cTV = prop_id(v->fd, v->conn_id, DRM_MODE_OBJECT_CONNECTOR, "TV mode");
+    /* The VEC composite connector carries a "TV mode" (NTSC/PAL) property; the
+     * rpi-dpidac VGA666 connector does not — its mode fully defines the signal,
+     * so there is no norm to program. */
+    uint32_t cTV = v->is_dpi ? 0
+        : prop_id(v->fd, v->conn_id, DRM_MODE_OBJECT_CONNECTOR, "TV mode");
     uint32_t rA = prop_id(v->fd, v->crtc_id, DRM_MODE_OBJECT_CRTC, "ACTIVE");
     uint32_t rM = prop_id(v->fd, v->crtc_id, DRM_MODE_OBJECT_CRTC, "MODE_ID");
     uint32_t pF = prop_id(v->fd, v->plane_id, DRM_MODE_OBJECT_PLANE, "FB_ID");
@@ -266,8 +344,8 @@ static bool commit_mode(pidvd_video_t *v)
     uint32_t pCW = prop_id(v->fd, v->plane_id, DRM_MODE_OBJECT_PLANE, "CRTC_W");
     uint32_t pCH = prop_id(v->fd, v->plane_id, DRM_MODE_OBJECT_PLANE, "CRTC_H");
     uint64_t norm_val = 0;
-    if (!cP || !cTV || !rA || !rM || !pF || !pC || !pSW || !pSH || !pCW || !pCH
-        || !enum_val(v->fd, cTV, norm, &norm_val)) {
+    if (!cP || !rA || !rM || !pF || !pC || !pSW || !pSH || !pCW || !pCH
+        || (!v->is_dpi && (!cTV || !enum_val(v->fd, cTV, norm, &norm_val)))) {
         fprintf(stderr, "video: atomic props/norm '%s' unavailable\n", norm);
         return false;
     }
@@ -295,7 +373,8 @@ static bool commit_mode(pidvd_video_t *v)
     }
     drmModeAtomicReq *on = drmModeAtomicAlloc();
     drmModeAtomicAddProperty(on, v->conn_id, cP, v->crtc_id);
-    drmModeAtomicAddProperty(on, v->conn_id, cTV, norm_val);
+    if (!v->is_dpi)
+        drmModeAtomicAddProperty(on, v->conn_id, cTV, norm_val);
     drmModeAtomicAddProperty(on, v->crtc_id, rM, blob);
     drmModeAtomicAddProperty(on, v->crtc_id, rA, 1);
     drmModeAtomicAddProperty(on, v->plane_id, pF, v->buf[0].fb_id);
@@ -315,8 +394,8 @@ static bool commit_mode(pidvd_video_t *v)
         fprintf(stderr, "video: atomic ON failed: %s\n", strerror(errno));
         return false;
     }
-    fprintf(stderr, "video: VEC %s norm=%s (atomic off->on)\n",
-            v->mode.name, norm);
+    fprintf(stderr, "video: %s %s norm=%s (atomic off->on)\n",
+            v->is_dpi ? "DPI" : "VEC", v->mode.name, norm);
     return true;
 }
 
