@@ -63,10 +63,11 @@ static void drive_eject(void)
  * off->on modeset in video_kms the VEC is fully re-initialised and 240p is
  * clean. Selecting a disc switches to its native 576i/480i (atomic off->on
  * again), with playback staying field-accurate via the unchanged
- * interlaced flip path; STOP returns here and re-enters 240p NTSC. The
- * menu canvas renders at 720x480 and is decimated 2:1 to 720x240. */
-#define MENU_STD  PIDVD_STD_NTSC
-#define MENU_ROWS_H 480   /* logical render height; decimated 2:1 to 240p */
+ * interlaced flip path; STOP returns here and re-enters the menu mode. The
+ * menu standard follows the active output (NTSC 240p on HDMI, the VEC's
+ * vc4.tv_norm — PAL 288p here — on composite) so each display locks; the
+ * canvas renders full-height and is decimated 2:1 to the progressive raster. */
+#define MENU_ROWS_H 480   /* NTSC full render height (240p); PAL uses 576 */
 
 typedef struct {
     pidvd_video_t *video;
@@ -118,16 +119,45 @@ static void present_prompt(vout_t *vo, const ui_view_t *view, int seconds,
     pidvd_video_present(vo->video, f, true, false, NULL);
 }
 
+/* Confirm an OUTPUT switch — it only takes effect via a reboot into the matching
+ * single-connector boot config. target: 0 = composite, 1 = HDMI. */
+static void present_reboot_confirm(vout_t *vo, const ui_view_t *view, int target)
+{
+    pidvd_frame_t *f = pidvd_video_begin_frame(vo->video);
+    if (!f)
+        return;
+    ui_canvas_t c = { f->pixels, f->width, f->height, f->stride };
+    pidvd_ui_render(&c, view);
+
+    int bw = 560, bh = 174;
+    int bx = (c.w - bw) / 2, by = (c.h - bh) / 2;
+    bx &= ~1; by &= ~1;
+    ui_fill(&c, bx, by, bw, bh, 0x101010);
+    ui_hline2(&c, bx, by, bw, 0xffa000);
+    ui_hline2(&c, bx, by + bh - 2, bw, 0xffa000);
+
+    char t[40];
+    snprintf(t, sizeof(t), "SWITCH TO %s?", target ? "HDMI" : "COMPOSITE");
+    ui_text(&c, bx + 28, by + 24, 2, 4, 0xf4efe2, t);
+    ui_text(&c, bx + 28, by + 72, 2, 4, 0x8a7a50, "PLAYER WILL REBOOT");
+    ui_text(&c, bx + 28, by + 122, 2, 4, 0xffa000, "OK = REBOOT   BACK = CANCEL");
+
+    pidvd_video_present(vo->video, f, true, false, NULL);
+}
+
 int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
                       char *iso_out, size_t cap, int *resume_out)
 {
     if (resume_out)
         *resume_out = 0;
     vout_t vo;
-    vo.video = pidvd_video_open_mode(MENU_STD, PIDVD_SCAN_PROGRESSIVE);
+    vo.video = pidvd_video_open_mode(pidvd_video_menu_std(set->output),
+                                     PIDVD_SCAN_PROGRESSIVE);
     if (!vo.video)
         return -1;
     pidvd_video_set_hfilter(vo.video, (unsigned)set->comp_filter);
+    int menu_h = pidvd_video_menu_std(set->output) == PIDVD_STD_PAL
+                     ? 576 : MENU_ROWS_H;
     pidvd_input_t *in = pidvd_input_open();
 
     static const ui_item_t *view_items[MAX_VIEW];
@@ -162,6 +192,8 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
     unsigned idle = 0;   /* fields since the last input; arms the screensaver */
     bool prompting = false;   /* resume prompt over the browse screen */
     int prompt_sel = 0;       /* 0 = RESUME, 1 = START OVER */
+    bool confirm_reboot = false;      /* OUTPUT-switch reboot confirmation */
+    int booted_output = set->output;  /* the output we actually booted into */
 
     while (result < 0) {
         /* mount state drives attract<->browse */
@@ -207,7 +239,22 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
             && idle >= PIDVD_SAVER_IDLE_FRAMES)
             view.saver_active = true;
 
-        if (prompting) {
+        if (confirm_reboot) {
+            switch (k) {
+            case PIDVD_KEY_ENTER:
+            case PIDVD_KEY_PLAY_PAUSE:
+                ui_settings_save(set);   /* persist OUTPUT, then reboot into it */
+                pidvd_system_switch_output(set->output);   /* does not return */
+                break;
+            case PIDVD_KEY_STOP:
+            case PIDVD_KEY_MENU:
+                set->output = booted_output;   /* cancelled — keep current output */
+                confirm_reboot = false;
+                break;
+            default:
+                break;
+            }
+        } else if (prompting) {
             switch (k) {
             case PIDVD_KEY_UP:
             case PIDVD_KEY_DOWN:
@@ -245,11 +292,16 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
             case PIDVD_KEY_ENTER:
                 if (view.set_sel == UI_SET_RESCAN && cat)
                     catalog_rescan(cat);
+                else if (view.set_sel == UI_SET_OUTPUT)
+                    /* OUTPUT takes effect only via a reboot into the matching
+                     * boot config; OK raises the confirm prompt if it changed. */
+                    confirm_reboot = (set->output != booted_output);
                 else
                     ui_settings_cycle(set, view.set_sel, +1);
                 break;
             case PIDVD_KEY_MENU:
             case PIDVD_KEY_STOP:
+                set->output = booted_output;   /* discard an unconfirmed switch */
                 ui_settings_save(set);
                 view.screen = prev_screen;
                 break;
@@ -270,7 +322,7 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
             catalog_lock(cat);
             int n = catalog_count(cat);
             catalog_unlock(cat);
-            int rows = pidvd_ui_visible_rows(&view, MENU_ROWS_H);
+            int rows = pidvd_ui_visible_rows(&view, menu_h);
             if (rows < 1)
                 rows = 1;
             bool wrap = (set->layout == UI_MARQUEE);
@@ -363,7 +415,11 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
         }
 
         /* build the item view + render under the catalog lock */
-        if (cat && view.screen == UI_BROWSE) {
+        if (confirm_reboot) {
+            view.items = NULL;
+            view.n_items = 0;
+            present_reboot_confirm(&vo, &view, set->output);
+        } else if (cat && view.screen == UI_BROWSE) {
             catalog_lock(cat);
             int n = catalog_count(cat);
             if (n > MAX_VIEW)

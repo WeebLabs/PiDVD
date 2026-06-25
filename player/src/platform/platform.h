@@ -39,6 +39,19 @@ typedef enum {
     PIDVD_SCAN_PROGRESSIVE,
 } pidvd_scan_t;
 
+/* Choose the active output connector before opening video: 0 = composite/VEC,
+ * 1 = HDMI (for an HDMI->VGA->SCART RGB chain). Persisted as the OUTPUT setting;
+ * set it before pidvd_video_open*(), re-set + reopen to switch live. */
+void pidvd_video_set_output(int output);
+/* Menu standard for the active output: composite follows vc4.tv_norm (PAL sets
+ * can't lock NTSC), HDMI stays NTSC. Open the menu with this, not a fixed std. */
+pidvd_standard_t pidvd_video_menu_std(int output);
+
+/* OUTPUT switching is reboot-based: each output has its own single-connector
+ * boot config (config-composite.txt / config-hdmi.txt + matching cmdline) on the
+ * FAT. This copies the chosen pair over the live config.txt/cmdline.txt and
+ * reboots into it. Does not return. */
+void pidvd_system_switch_output(int output);
 pidvd_video_t *pidvd_video_open(pidvd_standard_t std); /* interlaced */
 pidvd_video_t *pidvd_video_open_mode(pidvd_standard_t std, pidvd_scan_t scan);
 /* Switch standard at a VTS boundary (mixed discs). Full modeset. */

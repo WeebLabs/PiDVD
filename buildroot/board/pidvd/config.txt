@@ -1,32 +1,33 @@
-# PiDVD boot config — milestone 1: composite (VEC) output.
-# The player selects NTSC/PAL at runtime via KMS connector properties;
-# settings here only affect early boot.
+# PiDVD boot config — composite (VEC) output, the shipped default.
+# The OUTPUT setting in SETTINGS switches outputs by copying config-hdmi.txt
+# (or config-composite.txt) over this file + the matching cmdline and rebooting,
+# so each output gets a clean single-connector boot. The player still selects
+# NTSC/PAL per disc at runtime via KMS connector properties.
 
 kernel=zImage
 enable_uart=1
 disable_overscan=1
 disable_splash=1
 boot_delay=0
-# NOTE: do NOT add initial_turbo here. It overrides enable_uart's
-# core_freq lock, which desyncs the Pi 3 mini-UART baud — garbled serial
-# for the whole boot — and left the board unstable/off-network
-# (2026-06-13 incident). Reintroduce only with serial attached to verify.
+# NOTE: do NOT add initial_turbo here. It overrides enable_uart's core_freq
+# lock, which desyncs the Pi 3 mini-UART baud — garbled serial for the whole
+# boot — and left the board unstable/off-network (2026-06-13 incident).
 
-# Full KMS — the vc4 driver owns the VEC/DPI/pixel valves.
-# composite=1 is required: the overlay disables the VEC by default
-# (and composite is mutually exclusive with HDMI under KMS).
+# Full KMS — the vc4 driver owns the VEC/pixel valves. composite=1 enables the
+# VEC (the overlay disables it by default).
 dtoverlay=vc4-kms-v3d,composite=1
+# A warm reboot HDMI->composite leaves PLLH (the HDMI/VEC shared parent PLL) at a
+# stale HDMI rate, so the VEC comes up ~2x (doubled + monochrome); a cold boot is
+# clean. Hand KMS setup fully to the kernel and keep the firmware off the HDMI
+# clock path so the composite boot derives its own clean VEC clock.
+disable_fw_kms_setup=1
+hdmi_ignore_hotplug=1
 # 16M starves the full start.elf (can fail to boot); 64M is safe with KMS
 gpu_mem=64
 # analog audio (headphone jack) for SCART/TV audio fallback
 dtparam=audio=on
 
-# Firmware-era norm for the pre-KMS splash only; once KMS takes over,
-# the norm comes from the kernel cmdline / connector property.
-sdtv_mode=2
+# Pre-KMS splash norm only (splash disabled); the live norm is vc4.tv_norm on
+# the kernel cmdline. NTSC to match the 240p NTSC menu the player drives.
+sdtv_mode=0
 sdtv_aspect=1
-
-# Milestone 3 (VGA666): replace the above with
-#   dtoverlay=vc4-kms-dpi-generic + interlaced timings, or a custom
-#   pidvd overlay once DPI interlace is proven. GPIO 0-21 become DPI;
-#   IR receiver goes on GPIO 22-27 (dtoverlay=gpio-ir,gpio_pin=23).

@@ -10,8 +10,14 @@ BOARD_DIR="$(dirname "$0")"
 # that step is stamp-cached, so config.txt edits silently never reach
 # the image after the first build (cost us a full day of boot debugging
 # when a stale gpu_mem=16 kept shipping).
-install -m 0644 "${BOARD_DIR}/config.txt" "${BINARIES_DIR}/rpi-firmware/config.txt"
+# Default boot = composite. The OUTPUT setting copies in a *-hdmi or
+# *-composite variant and reboots, so ship all of them on the boot partition.
+install -m 0644 "${BOARD_DIR}/config.txt"  "${BINARIES_DIR}/rpi-firmware/config.txt"
 install -m 0644 "${BOARD_DIR}/cmdline.txt" "${BINARIES_DIR}/rpi-firmware/cmdline.txt"
+install -m 0644 "${BOARD_DIR}/config.txt"  "${BINARIES_DIR}/rpi-firmware/config-composite.txt"
+install -m 0644 "${BOARD_DIR}/cmdline.txt" "${BINARIES_DIR}/rpi-firmware/cmdline-composite.txt"
+install -m 0644 "${BOARD_DIR}/config-hdmi.txt"  "${BINARIES_DIR}/rpi-firmware/config-hdmi.txt"
+install -m 0644 "${BOARD_DIR}/cmdline-hdmi.txt" "${BINARIES_DIR}/rpi-firmware/cmdline-hdmi.txt"
 
 # Mount point for USB disc drives, and for the boot partition (deploys)
 mkdir -p "${TARGET_DIR}/media/usb" "${TARGET_DIR}/boot"

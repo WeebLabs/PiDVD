@@ -39,6 +39,10 @@ static int play_once(const char *path)
            pidvd_disc_volume_id(d), pidvd_disc_title_count(d),
            pidvd_standard_name(std), mixed ? " (mixed-standard disc)" : "");
     pidvd_disc_close(d);   /* info printed; dvdnav reopens the ISO */
+    /* Honor the saved OUTPUT setting (composite/HDMI) in direct-play too. */
+    ui_settings_t set;
+    ui_settings_load(&set);
+    pidvd_video_set_output(set.output);
     return pidvd_nav_play(path, NULL);
 }
 
@@ -46,6 +50,9 @@ static int ui_main(void)
 {
     ui_settings_t set;
     ui_settings_load(&set);
+    /* Drive composite or HDMI per the saved OUTPUT setting; the picker
+     * re-applies this live when it's changed. */
+    pidvd_video_set_output(set.output);
 
     static char iso[1024], now_buf[96];
     const char *now_name = NULL;

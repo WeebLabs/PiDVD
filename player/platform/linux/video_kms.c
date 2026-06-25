@@ -116,6 +116,10 @@ static bool mode_matches(pidvd_standard_t std, bool progressive, bool dpi,
 static bool choose_crtc(pidvd_video_t *v, drmModeRes *res,
                         const drmModeConnector *c)
 {
+    /* Prefer our connector's current CRTC, else its first possible one. On the
+     * Pi 3 the VEC and HDMI share one pixelvalve, so the chosen CRTC may still
+     * be driving the OTHER connector — commit_mode detaches that connector in
+     * its OFF step, making the takeover a clean switch rather than a conflict. */
     drmModeEncoder *e = c->encoder_id
         ? drmModeGetEncoder(v->fd, c->encoder_id) : NULL;
     if (e && e->crtc_id) {
@@ -192,6 +196,55 @@ static const drmModeModeInfo *hdmi_tv_mode(pidvd_standard_t std, bool progressiv
     return (std == PIDVD_STD_PAL) ? &m576i : &m480i;
 }
 
+/* Active output connector preference (the OUTPUT setting): 0 = composite/VEC,
+ * 1 = HDMI. pick_mode honors it so a single image drives either output. */
+static int g_want_output = 0;
+
+void pidvd_video_set_output(int output)
+{
+    g_want_output = output ? 1 : 0;
+}
+
+/* The menu's standard must match the active output's display or it won't lock.
+ * The composite/VEC outputs whatever vc4.tv_norm on the kernel cmdline selects
+ * (a PAL set can't sync to an NTSC raster), so read it. HDMI has no TV norm —
+ * the player builds the exact mode it drives — so the HDMI->VGA->SCART chain
+ * keeps the NTSC menu it expects. Defaults to PAL (the composite config). */
+pidvd_standard_t pidvd_video_menu_std(int output)
+{
+    if (output)
+        return PIDVD_STD_NTSC;
+    pidvd_standard_t std = PIDVD_STD_PAL;
+    FILE *f = fopen("/proc/cmdline", "r");
+    if (f) {
+        char buf[1024];
+        if (fgets(buf, sizeof(buf), f)) {
+            char *p = strstr(buf, "vc4.tv_norm=");
+            if (p && !strncmp(p + 12, "NTSC", 4))
+                std = PIDVD_STD_NTSC;
+        }
+        fclose(f);
+    }
+    return std;
+}
+
+void pidvd_system_switch_output(int output)
+{
+    /* Each output boots its own single-connector config; copy the chosen pair
+     * over the active config.txt/cmdline.txt on the FAT and reboot into it. */
+    const char *cfg = output ? "config-hdmi.txt" : "config-composite.txt";
+    const char *cmd = output ? "cmdline-hdmi.txt" : "cmdline-composite.txt";
+    char buf[160];
+    (void)system("mount -t vfat /dev/mmcblk0p1 /boot 2>/dev/null || true");
+    snprintf(buf, sizeof(buf), "cp /boot/%s /boot/config.txt", cfg);
+    (void)system(buf);
+    snprintf(buf, sizeof(buf), "cp /boot/%s /boot/cmdline.txt", cmd);
+    (void)system(buf);
+    (void)system("sync; umount /boot 2>/dev/null; reboot");
+    for (;;)
+        pause();   /* init is tearing us down; don't fall back into the UI */
+}
+
 /* Find a Composite mode for the requested standard and scan. Interlaced:
  * 480i/576i. Progressive: 240p/288p (half the active lines, no interlace
  * flag). Sets v->mode/conn/crtc on success. */
@@ -206,25 +259,30 @@ static bool pick_mode(pidvd_video_t *v, pidvd_standard_t std, bool progressive)
         if (!c)
             continue;
         if (connector_usable(c)) {
-            bool hdmi = (c->connector_type == DRM_MODE_CONNECTOR_HDMIA);
-            bool dpi = (c->connector_type == DRM_MODE_CONNECTOR_VGA);
-            if (hdmi) {
+            int t = c->connector_type;
+            bool hdmi = (t == DRM_MODE_CONNECTOR_HDMIA);
+            /* Honor the OUTPUT setting: composite -> the VEC connector, HDMI ->
+             * the HDMI connector. (VGA, the abandoned DPI bridge, is never
+             * chosen.) */
+            bool want = g_want_output ? hdmi
+                                      : (t == DRM_MODE_CONNECTOR_Composite);
+            if (want && hdmi) {
                 /* HDMI->VGA/SCART converters expose only progressive PC modes,
                  * so command the TV timing directly: 240p/288p for the menu,
-                 * 480i/576i for playback (same 15 kHz line rate, pixel-doubled
-                 * to a legal HDMI TMDS clock). */
+                 * 480i/576i for playback (same 15 kHz line, pixel-doubled to a
+                 * legal HDMI TMDS clock). */
                 v->conn_id = c->connector_id;
                 v->is_dpi = true;   /* no VEC "TV mode" on HDMI */
                 if (choose_crtc(v, res, c)) {
                     v->mode = *hdmi_tv_mode(std, progressive);
                     found = true;
                 }
-            } else {
+            } else if (want) {
                 for (int m = 0; m < c->count_modes; m++) {
                     drmModeModeInfo *mi = &c->modes[m];
-                    if (mode_matches(std, progressive, dpi, mi)) {
+                    if (mode_matches(std, progressive, false, mi)) {
                         v->conn_id = c->connector_id;
-                        v->is_dpi = dpi;
+                        v->is_dpi = false;
                         if (!choose_crtc(v, res, c))
                             continue;
                         v->mode = *mi;
@@ -312,7 +370,11 @@ static bool select_plane(pidvd_video_t *v)
     v->plane_id = 0;
     for (uint32_t i = 0; i < pr->count_planes && !v->plane_id; i++) {
         drmModePlane *pl = drmModeGetPlane(v->fd, pr->planes[i]);
-        if (pl && (pl->possible_crtcs & (1u << v->crtc_index)))
+        /* Must drive our CRTC and not be bound to another (the other output's
+         * plane) — disabling a plane that's still on someone else's CRTC is the
+         * other half of the two-connector EINVAL. */
+        if (pl && (pl->possible_crtcs & (1u << v->crtc_index))
+            && (pl->crtc_id == 0 || pl->crtc_id == v->crtc_id))
             v->plane_id = pl->plane_id;
         if (pl)
             drmModeFreePlane(pl);
@@ -353,6 +415,34 @@ static bool commit_mode(pidvd_video_t *v)
     /* OFF: tear the pipeline down so the ON commit is a full enable. */
     drmModeAtomicReq *off = drmModeAtomicAlloc();
     drmModeAtomicAddProperty(off, v->conn_id, cP, 0);
+    /* Detach any OTHER connector currently driving our CRTC. The Pi 3's VEC and
+     * HDMI share a pixelvalve, so switching output means composite is still on
+     * this CRTC; disabling the CRTC with a connector still attached is the
+     * two-connector EINVAL. Detaching it here makes the switch clean. */
+    drmModeRes *res = drmModeGetResources(v->fd);
+    if (res) {
+        for (int i = 0; i < res->count_connectors; i++) {
+            if (res->connectors[i] == v->conn_id)
+                continue;
+            drmModeConnector *oc =
+                drmModeGetConnector(v->fd, res->connectors[i]);
+            if (!oc)
+                continue;
+            if (oc->encoder_id) {
+                drmModeEncoder *oe = drmModeGetEncoder(v->fd, oc->encoder_id);
+                if (oe && oe->crtc_id == v->crtc_id) {
+                    uint32_t op = prop_id(v->fd, oc->connector_id,
+                                          DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID");
+                    if (op)
+                        drmModeAtomicAddProperty(off, oc->connector_id, op, 0);
+                }
+                if (oe)
+                    drmModeFreeEncoder(oe);
+            }
+            drmModeFreeConnector(oc);
+        }
+        drmModeFreeResources(res);
+    }
     drmModeAtomicAddProperty(off, v->crtc_id, rA, 0);
     drmModeAtomicAddProperty(off, v->crtc_id, rM, 0);
     drmModeAtomicAddProperty(off, v->plane_id, pF, 0);

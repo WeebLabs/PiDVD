@@ -30,6 +30,9 @@ static const char *const saver_v[]  = { "OFF", "WARP STARFIELD", "DVD LOGO" };
  * text / cleaner colour. Tune to the lightest that clears the splotching. */
 static const char *const filter_v[] = { "OFF", "1", "2", "3", "4",
                                         "5", "6", "7", "8" };
+/* Display output / active connector: composite VEC, or HDMI (for an
+ * HDMI->VGA->SCART RGB chain). Switches live in the menu. */
+static const char *const output_v[] = { "COMPOSITE", "HDMI" };
 
 static const struct {
     const char *label;
@@ -43,6 +46,7 @@ static const struct {
     [UI_SET_DIM]    = { "ATTRACT DIM",    dim_v,    4 },
     [UI_SET_SAVER]  = { "SCREENSAVER",    saver_v,  3 },
     [UI_SET_FILTER] = { "COMP FILTER",    filter_v, 9 },
+    [UI_SET_OUTPUT] = { "OUTPUT",         output_v, 2 },
     [UI_SET_RESCAN] = { "RESCAN CATALOG", 0,        0 },
 };
 
@@ -54,6 +58,7 @@ static int *field(ui_settings_t *s, int row)
     case UI_SET_DIM:    return &s->attract_dim;
     case UI_SET_SAVER:  return &s->saver;
     case UI_SET_FILTER: return &s->comp_filter;
+    case UI_SET_OUTPUT: return &s->output;
     default:            return 0;   /* ADEV/VOL/RESCAN handled specially */
     }
 }
@@ -167,6 +172,7 @@ void ui_settings_load(ui_settings_t *s)
                 if (s->comp_filter < 0 || s->comp_filter > 8)
                     s->comp_filter = 5;
             }
+            else if (!strcmp(line, "output")) s->output = atoi(v) & 1;
             else if (!strcmp(line, "last_std")) s->last_standard = atoi(v) & 1;
             else if (!strcmp(line, "last_disc"))
                 snprintf(s->last_disc, sizeof(s->last_disc), "%s", v);
@@ -190,10 +196,10 @@ void ui_settings_save(const ui_settings_t *s)
     FILE *f = fopen(path, "w");
     if (f) {
         fprintf(f, "theme=%d\nlayout=%d\nvolume=%d\nadev=%s\ndim=%d\n"
-                   "saver=%d\nfilter=%d\nlast_std=%d\nlast_disc=%s\n"
+                   "saver=%d\nfilter=%d\noutput=%d\nlast_std=%d\nlast_disc=%s\n"
                    "last_title=%d\nlast_sector=%d\nlast_seconds=%d\n",
                 s->theme, s->layout, s->volume, s->audio_dev,
-                s->attract_dim, s->saver, s->comp_filter,
+                s->attract_dim, s->saver, s->comp_filter, s->output,
                 s->last_standard, s->last_disc,
                 s->last_title, s->last_sector, s->last_seconds);
         fclose(f);
