@@ -30,6 +30,10 @@ void catalog_rescan(catalog_t *cat);
  * returns count and writes the sole ISO's path if exactly one. */
 int catalog_root_iso_count(catalog_t *cat, char *only, int cap);
 
+/* Total .iso files in the whole library (recursive walk of the root tree),
+ * for the header's "n DISCS" count. Computed once at open / on rescan. */
+int catalog_iso_total(const catalog_t *cat);
+
 /* Snapshot access for rendering. Hold the lock only while drawing. */
 void catalog_lock(catalog_t *cat);
 void catalog_unlock(catalog_t *cat);

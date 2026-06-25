@@ -125,6 +125,30 @@ int ui_settings_cycle(ui_settings_t *s, int row, int dir)
     return 1;
 }
 
+int ui_settings_get(const ui_settings_t *s, int row)
+{
+    if (row == UI_SET_ADEV) return s->dev_sel;
+    if (row == UI_SET_VOL)  return s->volume;
+    const int *f = field((ui_settings_t *)s, row);
+    return f ? *f : 0;
+}
+
+void ui_settings_set(ui_settings_t *s, int row, int val)
+{
+    if (row == UI_SET_ADEV) {
+        if (s->n_dev > 0) {
+            if (val < 0) val = 0;
+            if (val >= s->n_dev) val = s->n_dev - 1;
+            s->dev_sel = val;
+            snprintf(s->audio_dev, sizeof(s->audio_dev), "%s", s->dev_id[val]);
+        }
+        return;
+    }
+    if (row == UI_SET_VOL) { s->volume = val; return; }
+    int *f = field(s, row);
+    if (f) *f = val;
+}
+
 void ui_settings_resolve_dev(ui_settings_t *s)
 {
     for (int i = 0; i < s->n_dev; i++) {

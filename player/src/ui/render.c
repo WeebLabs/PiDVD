@@ -43,6 +43,8 @@ const ui_theme_t pidvd_themes[PIDVD_N_THEMES] = {
 #define G_PGDN   "\xc2\xbb"      /* » */
 #define G_ELL    "\xe2\x80\xa6"  /* … */
 #define G_STOP   "\xe2\x96\xa0"  /* ■ */
+#define G_GEAR   "\xe2\x9a\x99"  /* ⚙ settings */
+#define G_BACK   "\xe2\x86\x90"  /* ← back */
 
 /* sizes: SMALL 8x16, LIST 16x16, TITLE 32x32 (docs/UI.md §3) */
 #define S_SM_X 1
@@ -250,8 +252,8 @@ static int header(ui_canvas_t *c, const ui_view_t *v, const ui_theme_t *th,
     ui_text(c, x + 8, y + 2, S_LS_X, S_LS_Y, th->bright, "PiDVD");
 
     char count[32];
-    snprintf(count, sizeof(count), "%d DISC%s", v->n_items,
-             v->n_items == 1 ? "" : "S");
+    snprintf(count, sizeof(count), "%d DISC%s", v->n_discs,
+             v->n_discs == 1 ? "" : "S");
     ui_text(c, g->x1 - 8 - ui_text_w(count, S_SM_X), y + 8, S_SM_X, S_SM_Y,
             th->dim, count);
 
@@ -428,8 +430,8 @@ static void render_console(ui_canvas_t *c, const ui_view_t *v,
     hint_t h[5] = {
         { G_UP G_DOWN, "SELECT" },
         { G_ENTER, on_dir ? "OPEN" : "PLAY" },
-        { G_LEFT, v->at_root ? "SETTINGS" : "BACK" },
-        { G_PGUP " " G_PGDN, "PAGE" },
+        { v->at_root ? G_GEAR : G_BACK, v->at_root ? "SETTINGS" : "BACK" },
+        { G_LEFT " " G_RIGHT, "PAGE" },
         { G_STOP, "EJECT" },
     };
     footer(c, &g, th, h, 5, false);
@@ -499,8 +501,8 @@ static void render_wireframe(ui_canvas_t *c, const ui_view_t *v,
     hint_t h[5] = {
         { G_UP G_DOWN, "SELECT" },
         { G_ENTER, on_dir ? "OPEN" : "PLAY" },
-        { G_LEFT, v->at_root ? "SETTINGS" : "BACK" },
-        { G_PGUP " " G_PGDN, "PAGE" },
+        { v->at_root ? G_GEAR : G_BACK, v->at_root ? "SETTINGS" : "BACK" },
+        { G_LEFT " " G_RIGHT, "PAGE" },
         { G_STOP, "EJECT" },
     };
     footer(c, &g, th, h, 5, false);
@@ -531,7 +533,7 @@ static void render_marquee(ui_canvas_t *c, const ui_view_t *v,
         snprintf(loc, sizeof(loc), "PiDVD %s %s %s /%s", G_DOT,
                  v->source ? v->source : "USB", G_DOT,
                  v->path ? v->path : "");
-        snprintf(cnt, sizeof(cnt), " %s %d DISCS", G_DOT, v->n_items);
+        snprintf(cnt, sizeof(cnt), " %s %d DISCS", G_DOT, v->n_discs);
         int w = 20 + ui_text_w(loc, S_SM_X) + ui_text_w(cnt, S_SM_X);
         int x = cx - w / 2;
         x = ui_text(c, x, g.y0 + 4, S_SM_X, S_SM_Y, th->hot, G_DISC);
@@ -608,7 +610,7 @@ static void render_marquee(ui_canvas_t *c, const ui_view_t *v,
     hint_t h[3] = {
         { G_UP G_DOWN, "SELECT" },
         { G_ENTER, "PLAY" },
-        { G_LEFT, v->at_root ? "SETTINGS" : "BACK" },
+        { v->at_root ? G_GEAR : G_BACK, v->at_root ? "SETTINGS" : "BACK" },
     };
     footer(c, &g, th, h, 3, true);
 }
@@ -708,8 +710,8 @@ static void render_ledger(ui_canvas_t *c, const ui_view_t *v,
     hint_t h[5] = {
         { G_UP G_DOWN, "SELECT" },
         { G_ENTER, "PLAY" },
-        { G_LEFT, v->at_root ? "SETTINGS" : "BACK" },
-        { G_PGUP " " G_PGDN, "PAGE" },
+        { v->at_root ? G_GEAR : G_BACK, v->at_root ? "SETTINGS" : "BACK" },
+        { G_LEFT " " G_RIGHT, "PAGE" },
         { G_STOP, "EJECT" },
     };
     footer(c, &g, th, h, 5, false);
@@ -759,11 +761,11 @@ static void render_settings(ui_canvas_t *c, const ui_view_t *v,
     if (v->set_editing) {
         h[0] = (hint_t){ G_LEFT G_RIGHT, "CHANGE" };
         h[1] = (hint_t){ G_ENTER, "CONFIRM" };
-        h[2] = (hint_t){ G_STOP, "BACK" };
+        h[2] = (hint_t){ G_BACK, "REVERT" };   /* Back undoes the edit */
     } else {
         h[0] = (hint_t){ G_UP G_DOWN, "SELECT" };
         h[1] = (hint_t){ G_ENTER, "EDIT" };
-        h[2] = (hint_t){ G_STOP, "BACK" };
+        h[2] = (hint_t){ G_BACK, "CLOSE" };    /* Back leaves SETTINGS */
     }
     footer(c, &g, th, h, 3, false);
 }

@@ -37,7 +37,7 @@
 static const char *const KEYS[] = {
     "up",   "down", "left",  "right", "enter", "menu",  "title",
     "pause", "stop", "next", "prev",  "audio", "sub",
-    "volup", "voldown", NULL,
+    "volup", "voldown", "settings", "back", NULL,
 };
 
 static const char *fifo_path = DEFAULT_FIFO;
@@ -116,8 +116,12 @@ static const char PAGE[] =
 "<button class=down data-k=down>\xe2\x96\xbc</button>"
 "</div>"
 "<div class=row>"
-"<button class=wide data-k=menu>MENU</button>"
+"<button class=wide data-k=settings>\xe2\x9a\x99</button>"  /* gear */
+"<button class=wide data-k=back>\xe2\x86\x90</button>"      /* back arrow */
 "<button class=wide data-k=title>TITLE</button>"
+"</div>"
+"<div class=row>"
+"<button class=wide data-k=menu>MENU</button>"
 "</div>"
 "<div class=row>"
 "<button class=wide data-k=prev>\xe2\x8f\xae</button>"

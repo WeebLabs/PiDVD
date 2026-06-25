@@ -29,6 +29,7 @@ struct catalog {
     bool scanning;
     int generation;              /* bumped on chdir/rescan */
     FILE *cache_append;
+    int iso_total;               /* total ISOs under root, recursive (header count) */
 };
 
 /* ---- cache ------------------------------------------------------------ */
@@ -172,6 +173,34 @@ static void dir_quickstats(const char *abs, ui_item_t *v)
         }
     }
     closedir(d);
+}
+
+/* Recursive .iso count for the whole library — the header "n DISCS" total.
+ * Pure readdir + stat (no ISO opens), so it's cheap even for a big tree. */
+static int count_isos(const char *abs, int depth)
+{
+    if (depth > 24)
+        return 0;   /* guard against pathological nesting / symlink loops */
+    DIR *d = opendir(abs);
+    if (!d)
+        return 0;
+    int count = 0;
+    struct dirent *de;
+    while ((de = readdir(d))) {
+        if (de->d_name[0] == '.')
+            continue;
+        char p[1600];
+        snprintf(p, sizeof(p), "%s/%s", abs, de->d_name);
+        struct stat st;
+        if (stat(p, &st))
+            continue;
+        if (S_ISDIR(st.st_mode))
+            count += count_isos(p, depth + 1);
+        else if (is_iso(de->d_name))
+            count++;
+    }
+    closedir(d);
+    return count;
 }
 
 /* rebuild ents for cwd; call with lock held */
@@ -346,6 +375,7 @@ catalog_t *catalog_open(const char *root)
     pthread_mutex_lock(&c->mu);
     list_cwd(c);
     pthread_mutex_unlock(&c->mu);
+    c->iso_total = count_isos(c->root, 0);
     pthread_create(&c->thr, NULL, scan_main, c);
     return c;
 }
@@ -405,6 +435,7 @@ void catalog_rescan(catalog_t *c)
     remove(path);
     c->generation++;
     list_cwd(c);
+    c->iso_total = count_isos(c->root, 0);
     for (int i = 0; i < c->n; i++)
         if (!c->ents[i].v.is_dir)
             c->ents[i].v.scanned = false;
@@ -431,6 +462,7 @@ int catalog_root_iso_count(catalog_t *c, char *only, int cap)
 void catalog_lock(catalog_t *c)   { pthread_mutex_lock(&c->mu); }
 void catalog_unlock(catalog_t *c) { pthread_mutex_unlock(&c->mu); }
 int catalog_count(const catalog_t *c) { return c->n; }
+int catalog_iso_total(const catalog_t *c) { return c->iso_total; }
 const cat_entry_t *catalog_get(const catalog_t *c, int idx)
 {
     return (idx >= 0 && idx < c->n) ? &c->ents[idx] : NULL;

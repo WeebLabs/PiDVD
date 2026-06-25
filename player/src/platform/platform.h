@@ -136,6 +136,8 @@ typedef enum {
     PIDVD_KEY_AUDIO, PIDVD_KEY_SUBTITLE, PIDVD_KEY_ANGLE,
     PIDVD_KEY_FIELD,   /* invert output field dominance (menu judder fix) */
     PIDVD_KEY_VOL_UP, PIDVD_KEY_VOL_DOWN, /* live output volume during playback */
+    PIDVD_KEY_SETTINGS,  /* gear: open SETTINGS (formerly one of MENU's roles) */
+    PIDVD_KEY_BACK,      /* back-arrow: up / close / cancel one step */
 } pidvd_key_t;
 
 typedef struct pidvd_input pidvd_input_t;

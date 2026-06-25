@@ -194,6 +194,7 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
     int prompt_sel = 0;       /* 0 = RESUME, 1 = START OVER */
     bool confirm_reboot = false;      /* OUTPUT-switch reboot confirmation */
     int booted_output = set->output;  /* the output we actually booted into */
+    int set_pre = 0;                  /* a settings row's pre-edit value, for Back-revert */
 
     while (result < 0) {
         /* mount state drives attract<->browse */
@@ -247,7 +248,7 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
                 pidvd_system_switch_output(set->output);   /* does not return */
                 break;
             case PIDVD_KEY_STOP:
-            case PIDVD_KEY_MENU:
+            case PIDVD_KEY_BACK:
                 set->output = booted_output;   /* cancelled — keep current output */
                 confirm_reboot = false;
                 break;
@@ -269,7 +270,7 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
                 result = 0;   /* iso_out already holds the chosen disc */
                 break;
             case PIDVD_KEY_STOP:
-            case PIDVD_KEY_MENU:
+            case PIDVD_KEY_BACK:
                 prompting = false;   /* cancel; back to the list */
                 break;
             default:
@@ -279,7 +280,7 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
             /* Two-step edit: BROWSE picks a row (OK opens it), EDIT adjusts it
              * with the arrows and OK commits — so a value can't be bumped by
              * accident. The row's look changes per state (see render_settings). */
-            bool adjusted = false;
+            bool touched = false;   /* a value changed this key (adjust or revert) */
             if (!view.set_editing) {
                 switch (k) {
                 case PIDVD_KEY_UP:
@@ -296,10 +297,11 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
                     if (view.set_sel == UI_SET_RESCAN) {
                         if (cat) catalog_rescan(cat);   /* an action, not a value */
                     } else {
+                        set_pre = ui_settings_get(set, view.set_sel); /* for Back-revert */
                         view.set_editing = true;        /* open this row for change */
                     }
                     break;
-                case PIDVD_KEY_MENU:
+                case PIDVD_KEY_BACK:
                 case PIDVD_KEY_STOP:
                     set->output = booted_output;   /* discard an unconfirmed switch */
                     ui_settings_save(set);
@@ -312,11 +314,11 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
                 switch (k) {
                 case PIDVD_KEY_LEFT:
                     ui_settings_cycle(set, view.set_sel, -1);
-                    adjusted = true;
+                    touched = true;
                     break;
                 case PIDVD_KEY_RIGHT:
                     ui_settings_cycle(set, view.set_sel, +1);
-                    adjusted = true;
+                    touched = true;
                     break;
                 case PIDVD_KEY_ENTER:                /* commit + close the row */
                     if (view.set_sel == UI_SET_OUTPUT
@@ -324,8 +326,10 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
                         confirm_reboot = true;       /* OUTPUT commits via a reboot */
                     view.set_editing = false;
                     break;
-                case PIDVD_KEY_MENU:
-                case PIDVD_KEY_STOP:                 /* close, stay in settings */
+                case PIDVD_KEY_BACK:                 /* revert the row, stay in settings */
+                case PIDVD_KEY_STOP:
+                    ui_settings_set(set, view.set_sel, set_pre);
+                    touched = true;
                     view.set_editing = false;
                     break;
                 default:
@@ -336,7 +340,7 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
             pidvd_video_set_hfilter(vo.video, set->output ? 0u : (unsigned)set->comp_filter);
             /* VOLUME / device pushed to the active card live on adjust, so the
              * hardware and the displayed % stay in step (mixer never read back). */
-            if (adjusted
+            if (touched
                 && (view.set_sel == UI_SET_VOL || view.set_sel == UI_SET_ADEV))
                 pidvd_audio_set_volume(set->audio_dev, set->volume);
         } else if (view.screen == UI_BROWSE && cat) {
@@ -358,14 +362,15 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
                 else if (wrap) view.sel = 0;
                 break;
             case PIDVD_KEY_PREV_CHAPTER:
+            case PIDVD_KEY_LEFT:           /* ‹ pages up — arrows always paginate */
                 view.sel -= rows;
                 if (view.sel < 0) view.sel = 0;
                 break;
             case PIDVD_KEY_NEXT_CHAPTER:
+            case PIDVD_KEY_RIGHT:          /* › pages down */
                 view.sel += rows;
                 if (view.sel > n - 1) view.sel = n - 1;
                 break;
-            case PIDVD_KEY_RIGHT:
             case PIDVD_KEY_ENTER:
             case PIDVD_KEY_PLAY_PAUSE: {
                 catalog_lock(cat);
@@ -393,17 +398,17 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
                 }
                 break;
             }
-            case PIDVD_KEY_LEFT:
-            case PIDVD_KEY_MENU:
+            case PIDVD_KEY_BACK:           /* up a level (nothing above the root) */
                 if (!catalog_at_root(cat)) {
                     catalog_up(cat);
                     view.sel = view.scroll = 0;
-                } else {
-                    prev_screen = UI_BROWSE;
-                    view.screen = UI_SETTINGS;
-                    view.set_sel = 0;
-                    view.set_editing = false;
                 }
+                break;
+            case PIDVD_KEY_SETTINGS:       /* gear: open SETTINGS from any folder */
+                prev_screen = UI_BROWSE;
+                view.screen = UI_SETTINGS;
+                view.set_sel = 0;
+                view.set_editing = false;
                 break;
             case PIDVD_KEY_TITLE:
                 if (now_playing && set->last_disc[0]) {
@@ -429,7 +434,7 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
             if (view.sel >= view.scroll + rows)
                 view.scroll = view.sel - rows + 1;
         } else { /* ATTRACT */
-            if (k == PIDVD_KEY_MENU) {
+            if (k == PIDVD_KEY_SETTINGS) {
                 prev_screen = UI_ATTRACT;
                 view.screen = UI_SETTINGS;
                 view.set_sel = 0;
@@ -441,6 +446,7 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
         if (confirm_reboot) {
             view.items = NULL;
             view.n_items = 0;
+            view.n_discs = 0;
             present_reboot_confirm(&vo, &view, set->output);
         } else if (cat && view.screen == UI_BROWSE) {
             catalog_lock(cat);
@@ -451,6 +457,7 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
                 view_items[i] = &catalog_get(cat, i)->v;
             view.items = view_items;
             view.n_items = n;
+            view.n_discs = catalog_iso_total(cat);
             view.at_root = catalog_at_root(cat);
             view.path = catalog_cwd(cat);
             view.scanning = catalog_scanning(cat);
@@ -462,6 +469,7 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
         } else {
             view.items = NULL;
             view.n_items = 0;
+            view.n_discs = 0;
             present(&vo, &view);
         }
         view.tick++;

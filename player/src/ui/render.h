@@ -50,7 +50,8 @@ typedef struct {
 
     /* BROWSE */
     const ui_item_t *const *items;
-    int n_items;
+    int n_items;                  /* entries in the current folder (incl. ".." + dirs) */
+    int n_discs;                  /* total ISOs in the whole library (recursive) */
     int sel;                      /* selected index */
     int scroll;                   /* first visible index */
     bool at_root;

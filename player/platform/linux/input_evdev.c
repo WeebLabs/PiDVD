@@ -51,6 +51,7 @@ static pidvd_key_t map_word(const char *w)
         { "prev", PIDVD_KEY_PREV_CHAPTER }, { "audio", PIDVD_KEY_AUDIO },
         { "sub", PIDVD_KEY_SUBTITLE }, { "field", PIDVD_KEY_FIELD },
         { "volup", PIDVD_KEY_VOL_UP }, { "voldown", PIDVD_KEY_VOL_DOWN },
+        { "settings", PIDVD_KEY_SETTINGS }, { "back", PIDVD_KEY_BACK },
     };
     for (unsigned i = 0; i < sizeof(tab) / sizeof(tab[0]); i++)
         if (!strcmp(w, tab[i].w))
@@ -86,6 +87,10 @@ static pidvd_key_t map_key(unsigned code)
     case KEY_A:         return PIDVD_KEY_AUDIO;
     case KEY_C:         return PIDVD_KEY_SUBTITLE;
     case KEY_F:         return PIDVD_KEY_FIELD;
+    case KEY_G:
+    case KEY_SETUP:     return PIDVD_KEY_SETTINGS;
+    case KEY_B:
+    case KEY_BACK:      return PIDVD_KEY_BACK;
     case KEY_VOLUMEUP:    return PIDVD_KEY_VOL_UP;
     case KEY_VOLUMEDOWN:  return PIDVD_KEY_VOL_DOWN;
     default:            return PIDVD_KEY_NONE;

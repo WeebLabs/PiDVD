@@ -47,6 +47,11 @@ const char *ui_settings_value(const ui_settings_t *s, int row);
 /* Cycle a row's value by dir (+1/-1). Returns 1 if it changed. */
 int ui_settings_cycle(ui_settings_t *s, int row, int dir);
 
+/* Raw value of a row (ADEV->dev_sel, VOL->volume, else the value index): snapshot
+ * it before opening a row for edit, then restore on Back to revert the change. */
+int  ui_settings_get(const ui_settings_t *s, int row);
+void ui_settings_set(ui_settings_t *s, int row, int val);
+
 /* 1 if a row is live in the current context, 0 if disabled (shown dimmed and
  * unselectable). COMP FILTER is composite-only — disabled when OUTPUT is HDMI. */
 int ui_settings_enabled(const ui_settings_t *s, int row);
