@@ -68,6 +68,16 @@ const char *ui_settings_label(int row)
     return (row >= 0 && row < UI_SET_ROWS) ? rows[row].label : "";
 }
 
+/* A row can be inert in the current context: COMP FILTER band-limits luma below
+ * the composite colour subcarrier, so on HDMI/RGB it does nothing and is shown
+ * dimmed + unselectable. Returns 1 if the row is live, 0 if disabled. */
+int ui_settings_enabled(const ui_settings_t *s, int row)
+{
+    if (row == UI_SET_FILTER)
+        return s->output == 0;   /* composite (VEC) only */
+    return 1;
+}
+
 const char *ui_settings_value(const ui_settings_t *s, int row)
 {
     static char buf[12];

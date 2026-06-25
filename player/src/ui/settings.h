@@ -47,6 +47,10 @@ const char *ui_settings_value(const ui_settings_t *s, int row);
 /* Cycle a row's value by dir (+1/-1). Returns 1 if it changed. */
 int ui_settings_cycle(ui_settings_t *s, int row, int dir);
 
+/* 1 if a row is live in the current context, 0 if disabled (shown dimmed and
+ * unselectable). COMP FILTER is composite-only — disabled when OUTPUT is HDMI. */
+int ui_settings_enabled(const ui_settings_t *s, int row);
+
 /* Point dev_sel at the entry whose id matches audio_dev (else AUTO). Call
  * after the platform fills the dev_* list. */
 void ui_settings_resolve_dev(ui_settings_t *s);

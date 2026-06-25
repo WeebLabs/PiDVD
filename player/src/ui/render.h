@@ -64,6 +64,7 @@ typedef struct {
 
     /* SETTINGS */
     int set_sel;
+    bool set_editing;             /* row opened for adjustment: ‹ › change, OK commit */
 
     int tick;                     /* field-rate frame counter (animation) */
     bool saver_active;            /* idle: draw the screensaver over `screen` */

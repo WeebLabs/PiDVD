@@ -155,7 +155,7 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
                                      PIDVD_SCAN_PROGRESSIVE);
     if (!vo.video)
         return -1;
-    pidvd_video_set_hfilter(vo.video, (unsigned)set->comp_filter);
+    pidvd_video_set_hfilter(vo.video, set->output ? 0u : (unsigned)set->comp_filter);
     int menu_h = pidvd_video_menu_std(set->output) == PIDVD_STD_PAL
                      ? 576 : MENU_ROWS_H;
     pidvd_input_t *in = pidvd_input_open();
@@ -276,46 +276,67 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
                 break;
             }
         } else if (view.screen == UI_SETTINGS) {
-            switch (k) {
-            case PIDVD_KEY_UP:
-                view.set_sel = (view.set_sel + UI_SET_ROWS - 1) % UI_SET_ROWS;
-                break;
-            case PIDVD_KEY_DOWN:
-                view.set_sel = (view.set_sel + 1) % UI_SET_ROWS;
-                break;
-            case PIDVD_KEY_LEFT:
-                ui_settings_cycle(set, view.set_sel, -1);
-                break;
-            case PIDVD_KEY_RIGHT:
-                ui_settings_cycle(set, view.set_sel, +1);
-                break;
-            case PIDVD_KEY_ENTER:
-                if (view.set_sel == UI_SET_RESCAN && cat)
-                    catalog_rescan(cat);
-                else if (view.set_sel == UI_SET_OUTPUT)
-                    /* OUTPUT takes effect only via a reboot into the matching
-                     * boot config; OK raises the confirm prompt if it changed. */
-                    confirm_reboot = (set->output != booted_output);
-                else
+            /* Two-step edit: BROWSE picks a row (OK opens it), EDIT adjusts it
+             * with the arrows and OK commits — so a value can't be bumped by
+             * accident. The row's look changes per state (see render_settings). */
+            bool adjusted = false;
+            if (!view.set_editing) {
+                switch (k) {
+                case PIDVD_KEY_UP:
+                    do {
+                        view.set_sel = (view.set_sel + UI_SET_ROWS - 1) % UI_SET_ROWS;
+                    } while (!ui_settings_enabled(set, view.set_sel));
+                    break;
+                case PIDVD_KEY_DOWN:
+                    do {
+                        view.set_sel = (view.set_sel + 1) % UI_SET_ROWS;
+                    } while (!ui_settings_enabled(set, view.set_sel));
+                    break;
+                case PIDVD_KEY_ENTER:
+                    if (view.set_sel == UI_SET_RESCAN) {
+                        if (cat) catalog_rescan(cat);   /* an action, not a value */
+                    } else {
+                        view.set_editing = true;        /* open this row for change */
+                    }
+                    break;
+                case PIDVD_KEY_MENU:
+                case PIDVD_KEY_STOP:
+                    set->output = booted_output;   /* discard an unconfirmed switch */
+                    ui_settings_save(set);
+                    view.screen = prev_screen;
+                    break;
+                default:
+                    break;
+                }
+            } else {
+                switch (k) {
+                case PIDVD_KEY_LEFT:
+                    ui_settings_cycle(set, view.set_sel, -1);
+                    adjusted = true;
+                    break;
+                case PIDVD_KEY_RIGHT:
                     ui_settings_cycle(set, view.set_sel, +1);
-                break;
-            case PIDVD_KEY_MENU:
-            case PIDVD_KEY_STOP:
-                set->output = booted_output;   /* discard an unconfirmed switch */
-                ui_settings_save(set);
-                view.screen = prev_screen;
-                break;
-            default:
-                break;
+                    adjusted = true;
+                    break;
+                case PIDVD_KEY_ENTER:                /* commit + close the row */
+                    if (view.set_sel == UI_SET_OUTPUT
+                        && set->output != booted_output)
+                        confirm_reboot = true;       /* OUTPUT commits via a reboot */
+                    view.set_editing = false;
+                    break;
+                case PIDVD_KEY_MENU:
+                case PIDVD_KEY_STOP:                 /* close, stay in settings */
+                    view.set_editing = false;
+                    break;
+                default:
+                    break;
+                }
             }
-            /* COMP FILTER applies live on the CRT as it's cycled. */
-            pidvd_video_set_hfilter(vo.video, (unsigned)set->comp_filter);
-            /* VOLUME is a single preference applied to the active card. Pushing
-             * it on a volume change (live) or a device change (so the newly
-             * selected card adopts it) keeps hardware and the displayed % in
-             * step without ever reading the mixer back into the setting. */
-            if ((k == PIDVD_KEY_LEFT || k == PIDVD_KEY_RIGHT
-                 || k == PIDVD_KEY_ENTER)
+            /* COMP FILTER applies live on the CRT as it's adjusted. */
+            pidvd_video_set_hfilter(vo.video, set->output ? 0u : (unsigned)set->comp_filter);
+            /* VOLUME / device pushed to the active card live on adjust, so the
+             * hardware and the displayed % stay in step (mixer never read back). */
+            if (adjusted
                 && (view.set_sel == UI_SET_VOL || view.set_sel == UI_SET_ADEV))
                 pidvd_audio_set_volume(set->audio_dev, set->volume);
         } else if (view.screen == UI_BROWSE && cat) {
@@ -381,6 +402,7 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
                     prev_screen = UI_BROWSE;
                     view.screen = UI_SETTINGS;
                     view.set_sel = 0;
+                    view.set_editing = false;
                 }
                 break;
             case PIDVD_KEY_TITLE:
@@ -411,6 +433,7 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
                 prev_screen = UI_ATTRACT;
                 view.screen = UI_SETTINGS;
                 view.set_sel = 0;
+                view.set_editing = false;
             }
         }
 

@@ -727,22 +727,27 @@ static void render_settings(ui_canvas_t *c, const ui_view_t *v,
 
     int xl = g.x0 + 56, xv = g.x0 + 320;
     int y = g.y0 + 76, pitch = 36;
+    uint32_t off = ui_lerp(th->bg, th->dim, 110);  /* disabled: fainter than dim */
     for (int r = 0; r < UI_SET_ROWS; r++, y += pitch) {
         bool sel = (r == v->set_sel);
-        ui_text(c, xl, y, S_LS_X, S_LS_Y, sel ? th->text : th->dim,
-                ui_settings_label(r));
+        bool edit = sel && v->set_editing;   /* row is open for adjustment */
+        bool on = ui_settings_enabled(v->set, r);
+        ui_text(c, xl, y, S_LS_X, S_LS_Y,
+                !on ? off : (sel ? th->text : th->dim), ui_settings_label(r));
         char val[64];
-        if (r == UI_SET_RESCAN)
-            snprintf(val, sizeof(val), "%s", ui_settings_value(v->set, r));
-        else
+        if (edit)   /* ‹ › arrows appear only while the row is being adjusted */
             snprintf(val, sizeof(val), G_LEFT " %s " G_RIGHT,
                      ui_settings_value(v->set, r));
+        else
+            snprintf(val, sizeof(val), "%s", ui_settings_value(v->set, r));
         if (sel) {
             int w = ui_text_w(val, S_LS_X);
-            ui_fill(c, xv - 8, y - 3, w + 16, 22, th->bar);
-            ui_text(c, xv, y, S_LS_X, S_LS_Y, th->bartxt, val);
+            /* armed/editing row glows in the hot accent; a merely-selected row
+             * sits in the calm bar so the two states never read alike. */
+            ui_fill(c, xv - 8, y - 3, w + 16, 22, edit ? th->hot : th->bar);
+            ui_text(c, xv, y, S_LS_X, S_LS_Y, edit ? th->bg : th->bartxt, val);
         } else {
-            ui_text(c, xv, y, S_LS_X, S_LS_Y, th->bright, val);
+            ui_text(c, xv, y, S_LS_X, S_LS_Y, !on ? off : th->bright, val);
         }
     }
 
@@ -750,11 +755,16 @@ static void render_settings(ui_canvas_t *c, const ui_view_t *v,
                       " CRT NEVER LIES";
     ui_text(c, xl, g.y1 - 64, S_SM_X, S_SM_Y, th->dim, ver);
 
-    hint_t h[3] = {
-        { G_UP G_DOWN, "SELECT" },
-        { G_LEFT G_RIGHT, "CHANGE" },
-        { G_STOP, "EXIT" },
-    };
+    hint_t h[3];
+    if (v->set_editing) {
+        h[0] = (hint_t){ G_LEFT G_RIGHT, "CHANGE" };
+        h[1] = (hint_t){ G_ENTER, "CONFIRM" };
+        h[2] = (hint_t){ G_STOP, "BACK" };
+    } else {
+        h[0] = (hint_t){ G_UP G_DOWN, "SELECT" };
+        h[1] = (hint_t){ G_ENTER, "EDIT" };
+        h[2] = (hint_t){ G_STOP, "BACK" };
+    }
     footer(c, &g, th, h, 3, false);
 }
 
