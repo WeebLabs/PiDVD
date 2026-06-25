@@ -183,8 +183,13 @@ static void blend_overlay(void *opaque, uint8_t *rgb, int w, int h)
 static void prepare_epoch(void *ctx, uint64_t epoch)
 {
     struct engine *e = ctx;
-    /* Local DVD playback should reach this barrier quickly. A finite timeout
-     * keeps silent, malformed, or unsupported streams from holding video. */
+    /* Title playback lip-syncs, so hold the first frame until audio is primed.
+     * Menus don't gate video on audio (reset_audio_queue clears the flag in
+     * non-VTS domains), so present immediately — waiting on a motion menu's
+     * silent/slow audio is what stalled the decode loop and froze the remote.
+     * The finite timeout still keeps malformed title audio from holding video. */
+    if (!e->audio_gates_video)
+        return;
     pidvd_av_sync_wait_audio_ready(e->sync, epoch, 1500);
 }
 
@@ -203,7 +208,10 @@ static uint64_t reset_audio_queue(struct engine *e, bool new_epoch,
     if (new_epoch)
         e->epoch++;
     e->audio_serial++;
-    e->audio_gates_video = gate_video;
+    /* Only title (VTS) playback lip-syncs; menus present video at their own
+     * rate. Gating a motion menu's often-silent/slow audio stalls the decode
+     * loop and starves the input poll, so never gate in a menu domain. */
+    e->audio_gates_video = gate_video && dvdnav_is_domain_vts(e->nav);
     uint64_t epoch = e->epoch;
     e->a_head = e->a_tail = e->a_count = 0;
     pthread_cond_broadcast(&e->a_not_empty);
@@ -898,9 +906,13 @@ int pidvd_nav_play(const char *iso_path, pidvd_resume_t *resume)
     e.ps.audio_cb = on_audio_es;
 
     bool running = true;
-    unsigned tick = 0;
+    double last_poll = now_s();
     while (running) {
-        if ((tick++ & 63) == 0) {
+        /* Service input on a wall-clock cadence (~50 Hz) rather than every Nth
+         * loop iteration: a momentary decode stall must not freeze the remote. */
+        double pnow = now_s();
+        if (pnow - last_poll >= 0.02) {
+            last_poll = pnow;
             pidvd_key_t k = pidvd_input_poll(e.input);
             if (k != PIDVD_KEY_NONE && !handle_key(&e, k))
                 break;
