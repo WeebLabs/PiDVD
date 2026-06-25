@@ -386,6 +386,13 @@ static void on_audio_pcm(void *opaque, const int16_t *frames, int nframes,
     }
 
     pthread_mutex_lock(&e->a_lock);
+    /* Title playback blocks here to stay in A/V sync. Menus don't gate video on
+     * audio, so a slow, failed, or wrong audio device must not stall the decode
+     * loop and starve the picture — drop the chunk instead of waiting. */
+    if (e->a_count == ARING && !e->audio_gates_video) {
+        pthread_mutex_unlock(&e->a_lock);
+        return;
+    }
     while (e->a_count == ARING && e->a_run)
         pthread_cond_wait(&e->a_not_full, &e->a_lock);
     if (!e->a_run) {
