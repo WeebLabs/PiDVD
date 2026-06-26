@@ -43,6 +43,7 @@ add_library(pidvd_ui_render STATIC
     src/ui/render.c
     src/ui/settings.c
     src/ui/saver.c
+    src/ui/load_anim.c
 )
 target_include_directories(pidvd_ui_render PUBLIC src)
 # saver.c uses sinf/cosf/powf; pull in libm for every consumer (uipreview too)

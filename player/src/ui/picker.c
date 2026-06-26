@@ -9,6 +9,7 @@
 #include "platform/platform.h"
 #include "ui/catalog.h"
 #include "ui/draw.h"
+#include "ui/load_anim.h"
 #include "ui/render.h"
 #include "ui/saver.h"
 
@@ -81,6 +82,24 @@ static void present(vout_t *vo, const ui_view_t *view)
     ui_canvas_t c = { f->pixels, f->width, f->height, f->stride };
     pidvd_ui_render(&c, view);
     pidvd_video_present(vo->video, f, true, false, NULL);
+}
+
+/* Disc-loading animation: after an ISO is chosen, play the ~3 s tray-load
+ * sequence (any key skips) before returning so playback can start. */
+static void play_load_animation(vout_t *vo, const ui_settings_t *set,
+                                pidvd_input_t *in)
+{
+    const ui_theme_t *th = &pidvd_themes[set->theme % PIDVD_N_THEMES];
+    for (unsigned t = 0; t < PIDVD_LOAD_ANIM_FRAMES; t++) {
+        if (pidvd_input_poll(in) != PIDVD_KEY_NONE)
+            break;
+        pidvd_frame_t *f = pidvd_video_begin_frame(vo->video);
+        if (!f)
+            continue;
+        ui_canvas_t c = { f->pixels, f->width, f->height, f->stride };
+        pidvd_load_anim_render(&c, th, 0, 0, t);
+        pidvd_video_present(vo->video, f, true, false, NULL);
+    }
 }
 
 /* Resume prompt overlaid on the browse screen. sel: 0 = RESUME, 1 = START OVER.
@@ -474,6 +493,9 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
         }
         view.tick++;
     }
+
+    if (result == 0)
+        play_load_animation(&vo, set, in);
 
     if (cat)
         catalog_close(cat);
