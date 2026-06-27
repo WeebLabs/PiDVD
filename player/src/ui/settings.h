@@ -7,8 +7,8 @@
 #define PIDVD_UI_SETTINGS_H
 
 enum { UI_SET_THEME, UI_SET_LAYOUT, UI_SET_ADEV, UI_SET_VOL,
-       UI_SET_DIM, UI_SET_SAVER, UI_SET_FILTER, UI_SET_OUTPUT,
-       UI_SET_RESCAN, UI_SET_ROWS };
+       UI_SET_DIM, UI_SET_SAVER, UI_SET_SAVER_TO, UI_SET_FILTER,
+       UI_SET_OUTPUT, UI_SET_RESCAN, UI_SET_ROWS };
 
 /* AUTO plus up to a handful of real output cards. */
 #define UI_AUDIO_DEV_MAX 6
@@ -19,6 +19,7 @@ typedef struct {
     int volume;       /* 0..100, applied to the output card's mixer (UAC) */
     int attract_dim;  /* 0 off, 1 5min, 2 15min, 3 30min */
     int saver;        /* screensaver: 0 off, 1 warp starfield (PIDVD_SAVER_*) */
+    int saver_to;     /* screensaver idle timeout: index into saver_to_v[] */
     int comp_filter;  /* 0 off..8: menu composite horizontal low-pass strength */
     int output;       /* 0 composite/VEC, 1 HDMI — picks the active connector */
     char audio_dev[20]; /* selected output card id; "" = AUTO (USB->PWM) */
@@ -59,5 +60,9 @@ int ui_settings_enabled(const ui_settings_t *s, int row);
 /* Point dev_sel at the entry whose id matches audio_dev (else AUTO). Call
  * after the platform fills the dev_* list. */
 void ui_settings_resolve_dev(ui_settings_t *s);
+
+/* The SCREENSAVER TIMEOUT row as real seconds — the idle the picker must see
+ * before the screensaver arms. The run loop turns this into field-rate frames. */
+int ui_settings_saver_timeout_seconds(const ui_settings_t *s);
 
 #endif

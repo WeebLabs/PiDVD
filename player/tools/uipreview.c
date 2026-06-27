@@ -59,6 +59,25 @@ static void write_ppm(const char *path, const uint8_t *px)
     fclose(f);
 }
 
+/* Same, but for a shorter canvas (e.g. the 480-line NTSC menu) rendered into
+ * the top of the full-size buffer. */
+static void write_ppm_h(const char *path, const uint8_t *px, int h)
+{
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        perror(path);
+        exit(1);
+    }
+    fprintf(f, "P6\n%d %d\n255\n", W, h);
+    for (int i = 0; i < W * h; i++) {
+        const uint8_t *p = px + i * 4;
+        fputc(p[2], f);
+        fputc(p[1], f);
+        fputc(p[0], f);
+    }
+    fclose(f);
+}
+
 int main(int argc, char **argv)
 {
     const char *out = argc > 1 ? argv[1] : "preview";
@@ -107,14 +126,15 @@ int main(int argc, char **argv)
     v.now_playing = "Die Hard 2";
     v.tick = 30;
 
-    static const char *const tn[4] = { "amber-ice", "phosphor", "vfd",
-                                       "midnight" };
+    static const char *const tn[7] = { "amber-ice", "phosphor", "vfd",
+                                       "midnight", "terminal", "dark-sakura",
+                                       "light-sakura" };
     char path[512];
 
-    /* console in all four themes */
+    /* console in every theme */
     v.screen = UI_BROWSE;
     set.layout = UI_CONSOLE;
-    for (int t = 0; t < 4; t++) {
+    for (int t = 0; t < 7; t++) {
         set.theme = t;
         pidvd_ui_render(&c, &v);
         snprintf(path, sizeof(path), "%s/console-%s.ppm", out, tn[t]);
@@ -144,6 +164,54 @@ int main(int argc, char **argv)
     pidvd_ui_render(&c, &v);
     snprintf(path, sizeof(path), "%s/wireframe-terminal.ppm", out);
     write_ppm(path, px);
+
+    /* Both SAKURA variants in every layout + the settings screen, so the pink
+     * themes can be eyeballed end-to-end on the host before they reach the
+     * CRT — the light one especially, where bloom risk is the open question. */
+    static const struct { int theme; const char *name; } sak[] = {
+        { 5, "dark-sakura" }, { 6, "light-sakura" },
+    };
+    static const struct { int layout; const char *tag; } sk[] = {
+        { UI_CONSOLE, "console" }, { UI_MARQUEE, "marquee" },
+        { UI_LEDGER, "ledger" },   { UI_WIREFRAME, "wireframe" },
+    };
+    for (size_t s = 0; s < sizeof sak / sizeof sak[0]; s++) {
+        set.theme = sak[s].theme;
+        for (size_t i = 0; i < sizeof sk / sizeof sk[0]; i++) {
+            set.layout = sk[i].layout;
+            v.screen = UI_BROWSE;
+            pidvd_ui_render(&c, &v);
+            snprintf(path, sizeof(path), "%s/%s-%s.ppm", out, sk[i].tag,
+                     sak[s].name);
+            write_ppm(path, px);
+        }
+        set.layout = UI_CONSOLE;
+        v.screen = UI_SETTINGS;
+        v.set_sel = UI_SET_THEME;
+        pidvd_ui_render(&c, &v);
+        snprintf(path, sizeof(path), "%s/settings-%s.ppm", out, sak[s].name);
+        write_ppm(path, px);
+    }
+
+    /* SETTINGS at the real 480-line NTSC menu height — the tightest vertical
+     * fit, where the row pitch compresses so the last row still clears the
+     * footer. SAVER TIMEOUT selected to show the new row. */
+    {
+        ui_canvas_t cn = { px, W, 480, W * 4 };
+        set.layout = UI_CONSOLE;
+        v.screen = UI_SETTINGS;
+        v.set_sel = UI_SET_SAVER_TO;
+        set.theme = 0;
+        pidvd_ui_render(&cn, &v);
+        snprintf(path, sizeof(path), "%s/settings-ntsc-amber-ice.ppm", out);
+        write_ppm_h(path, px, 480);
+        set.theme = 6;
+        pidvd_ui_render(&cn, &v);
+        snprintf(path, sizeof(path), "%s/settings-ntsc-light-sakura.ppm", out);
+        write_ppm_h(path, px, 480);
+    }
+    v.screen = UI_BROWSE;
+
     set.theme = 0;
 
     set.layout = UI_CONSOLE;

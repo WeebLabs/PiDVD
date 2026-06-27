@@ -62,18 +62,20 @@ value table for them (a config option — no layout or code differences):
 | `BARTXT` | selection bar text (inverse video) |
 
 Hierarchy is always brightness-driven; accent hues are spent on *small*
-things. Four themes (XRGB8888):
+things. Seven themes (XRGB8888); TERMINAL is PHOSPHOR on a pure-black void,
+LIGHT SAKURA is DARK SAKURA's foreground over a twilight-blue near-black field
+instead of plum:
 
-| Role     | **AMBER & ICE** (default) | **PHOSPHOR** (mono) | **VFD** | **MIDNIGHT** |
-|----------|-----------|-----------|-----------|-----------|
-| `BG`     | `#0D0A06` | `#0E0600` | `#03100D` | `#070B14` |
-| `PANEL`  | `#161310` | `#1C0E00` | `#07201B` | `#0D1426` |
-| `DIM`    | `#4E6A86` | `#6E3C00` | `#1F5A50` | `#32436B` |
-| `TEXT`   | `#D98E00` | `#D97C00` | `#63D6BE` | `#8FB0E8` |
-| `BRIGHT` | `#F4EFE2` | `#FF9A00` | `#D9FFF4` | `#EEF2FA` |
-| `HOT`    | `#8FC6FF` | `#FFC29C` | `#FFB000` | `#FFB000` |
-| `BAR`    | `#FFA000` | `#FF8C00` | `#49E0C2` | `#5B86DC` |
-| `BARTXT` | `#1A0E00` | `#140900` | `#03201A` | `#060D1E` |
+| Role     | **AMBER & ICE** (default) | **PHOSPHOR** (mono) | **VFD** | **MIDNIGHT** | **DARK SAKURA** | **LIGHT SAKURA** |
+|----------|-----------|-----------|-----------|-----------|-----------|-----------|
+| `BG`     | `#0D0A06` | `#0E0600` | `#03100D` | `#070B14` | `#190912` | `#0A1428` |
+| `PANEL`  | `#161310` | `#1C0E00` | `#07201B` | `#0D1426` | `#2C1623` | `#172940` |
+| `DIM`    | `#4E6A86` | `#6E3C00` | `#1F5A50` | `#32436B` | `#A8728C` | `#A8728C` |
+| `TEXT`   | `#D98E00` | `#D97C00` | `#63D6BE` | `#8FB0E8` | `#F4BBD3` | `#F4BBD3` |
+| `BRIGHT` | `#F4EFE2` | `#FF9A00` | `#D9FFF4` | `#EEF2FA` | `#FFF2F8` | `#FFF2F8` |
+| `HOT`    | `#8FC6FF` | `#FFC29C` | `#FFB000` | `#FFB000` | `#FF5C9E` | `#FF5C9E` |
+| `BAR`    | `#FFA000` | `#FF8C00` | `#49E0C2` | `#5B86DC` | `#F06DA3` | `#F06DA3` |
+| `BARTXT` | `#1A0E00` | `#140900` | `#03201A` | `#060D1E` | `#280711` | `#280711` |
 
 - **AMBER & ICE** — amber body text, warm-white values and peaks, steel-blue
   chrome and labels (amber's complement), ice-blue accents. Warm where it
@@ -85,8 +87,17 @@ things. Four themes (XRGB8888):
   a tuner.
 - **MIDNIGHT** — the inverse pairing: blue-dominant with amber accents;
   closest to a '90s player OSD.
+- **DARK SAKURA** — cherry blossom at dusk: soft pink petals and white over a
+  dark plum twilight, the selection bar a glowing blossom read in dark-wine
+  inverse video. Pinks ride high-luma/low-sat, so they stay clean on
+  composite where saturated reds would bleed.
+- **LIGHT SAKURA** — blossom against a night sky: the same airy pink/white
+  petals as DARK SAKURA, but the page is a *very dim* twilight blue just above
+  black instead of plum — a cool night rather than a warm dusk. The faint blue
+  field tilts the foreground pink cooler and complementary, while staying dark
+  enough not to bloom.
 
-Compare them live: `scripts/ui-mock.sh` renders all four (or one by name).
+Compare them live: `scripts/ui-mock.sh` renders all seven (or one by name).
 Dithering to RGB666 for the VGA666 path is a non-issue at these levels —
 all ramps survive 6-bit cleanly.
 

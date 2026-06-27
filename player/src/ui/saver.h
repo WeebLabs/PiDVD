@@ -16,15 +16,11 @@
 enum { PIDVD_SAVER_OFF = 0, PIDVD_SAVER_WARP = 1, PIDVD_SAVER_DVD = 2,
        PIDVD_SAVER_FIREWORKS = 3 };
 
-/* How long the picker must see no input before the screensaver arms, in
- * real seconds. Deliberately a code-side knob (you asked for the timing to
- * be tunable in code) and distinct from the SETTINGS "ATTRACT DIM" option.
- * The picker loop ticks at the menu field rate, so seconds -> frames needs
- * that rate; the 240p NTSC menu runs ~60 fields/s. */
+/* The idle before the screensaver arms is the SETTINGS "SAVER TIMEOUT" row
+ * (ui_settings_saver_timeout_seconds), distinct from "ATTRACT DIM". The picker
+ * loop ticks at the menu field rate, so the run loop scales those seconds to
+ * frames with this rate; the 240p NTSC menu runs ~60 fields/s. */
 #define PIDVD_SAVER_FIELD_HZ      60
-#define PIDVD_SAVER_IDLE_SECONDS  90
-#define PIDVD_SAVER_IDLE_FRAMES \
-    ((unsigned)(PIDVD_SAVER_IDLE_SECONDS) * (unsigned)(PIDVD_SAVER_FIELD_HZ))
 
 /* Draw one animation frame of screensaver `kind` onto c, which the caller
  * has already cleared to the theme background. `tick` is the field-rate

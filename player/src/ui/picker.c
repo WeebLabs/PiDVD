@@ -164,6 +164,19 @@ static void present_reboot_confirm(vout_t *vo, const ui_view_t *view, int target
     pidvd_video_present(vo->video, f, true, false, NULL);
 }
 
+/* When a folder opens, land on its first real entry rather than the ".."
+ * go-to-parent line — which sorts to index 0 in every subfolder. Root has no
+ * "..", and a folder holding only ".." keeps sel 0. */
+static int folder_top_item(catalog_t *cat)
+{
+    catalog_lock(cat);
+    int n = catalog_count(cat);
+    const cat_entry_t *e0 = n > 0 ? catalog_get(cat, 0) : NULL;
+    int sel = (e0 && e0->v.is_parent && n > 1) ? 1 : 0;
+    catalog_unlock(cat);
+    return sel;
+}
+
 int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
                       char *iso_out, size_t cap, int *resume_out)
 {
@@ -246,17 +259,22 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
          * up, that first key only wakes it (consumed, not acted on) — then
          * normal input resumes. It arms on any picker screen (ATTRACT,
          * BROWSE, SETTINGS); waking returns to that same screen. */
+        /* Idle threshold is the SETTINGS "SAVER TIMEOUT" in real seconds, scaled
+         * to field-rate frames; read live so edits in the menu take effect at
+         * once. */
+        unsigned idle_frames = (unsigned)ui_settings_saver_timeout_seconds(set)
+                             * (unsigned)PIDVD_SAVER_FIELD_HZ;
         if (k != PIDVD_KEY_NONE) {
             idle = 0;
             if (view.saver_active) {
                 view.saver_active = false;
                 k = PIDVD_KEY_NONE;
             }
-        } else if (idle < PIDVD_SAVER_IDLE_FRAMES) {
+        } else if (idle < idle_frames) {
             idle++;
         }
         if (!view.saver_active && set->saver != PIDVD_SAVER_OFF
-            && idle >= PIDVD_SAVER_IDLE_FRAMES)
+            && idle >= idle_frames)
             view.saver_active = true;
 
         if (confirm_reboot) {
@@ -401,10 +419,12 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
                 catalog_unlock(cat);
                 if (parent) {
                     catalog_up(cat);
-                    view.sel = view.scroll = 0;
+                    view.scroll = 0;
+                    view.sel = folder_top_item(cat);
                 } else if (dir) {
                     catalog_enter(cat, view.sel);
-                    view.sel = view.scroll = 0;
+                    view.scroll = 0;
+                    view.sel = folder_top_item(cat);
                 } else if (e) {
                     /* A saved resume point for this disc -> prompt first. */
                     if (set->last_title >= 1 && set->last_seconds > 30
@@ -420,7 +440,8 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
             case PIDVD_KEY_BACK:           /* up a level (nothing above the root) */
                 if (!catalog_at_root(cat)) {
                     catalog_up(cat);
-                    view.sel = view.scroll = 0;
+                    view.scroll = 0;
+                    view.sel = folder_top_item(cat);
                 }
                 break;
             case PIDVD_KEY_SETTINGS:       /* gear: open SETTINGS from any folder */

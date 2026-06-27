@@ -26,6 +26,19 @@ const ui_theme_t pidvd_themes[PIDVD_N_THEMES] = {
      * wireframe vintage-terminal look (only the bg differs from PHOSPHOR). */
     { 0x000000, 0x1C0E00, 0x6E3C00, 0xD97C00, 0xFF9A00, 0xFFC29C,
       0xFF8C00, 0x140900 },
+    /* DARK SAKURA — cherry blossom at dusk: soft pink petals and white over a
+     * dark plum twilight. Pinks sit high-luma/low-sat, so they stay clean
+     * on composite where saturated reds would bleed. The selection bar is a
+     * glowing blossom pink read in dark-wine inverse video. */
+    { 0x190912, 0x2C1623, 0xA8728C, 0xF4BBD3, 0xFFF2F8, 0xFF5C9E,
+      0xF06DA3, 0x280711 },
+    /* LIGHT SAKURA — blossom against a night sky: the same airy pink/white
+     * petals as DARK SAKURA, but the page is a very dim twilight blue just
+     * above black instead of plum — a cool night rather than a warm dusk. The
+     * faint blue field tilts the foreground pink cooler and complementary,
+     * while staying dark enough not to bloom. */
+    { 0x0A1428, 0x172940, 0xA8728C, 0xF4BBD3, 0xFFF2F8, 0xFF5C9E,
+      0xF06DA3, 0x280711 },
 };
 
 /* UTF-8 literals for the glyph set */
@@ -728,7 +741,13 @@ static void render_settings(ui_canvas_t *c, const ui_view_t *v,
     ui_text(c, x + 8, g.y0 + 8, S_LS_X, S_LS_Y, th->bright, "SETTINGS");
 
     int xl = g.x0 + 56, xv = g.x0 + 320;
-    int y = g.y0 + 76, pitch = 36;
+    int y0 = g.y0 + 76, ver_y = g.y1 - 64;
+    /* Fit every row between the header and the version line: the roomy 36 px
+     * pitch on the 576 PAL menu clamps down on the shorter 480 NTSC one so the
+     * last row still clears the footer. */
+    int pitch = (ver_y - 20 - y0) / (UI_SET_ROWS - 1);
+    if (pitch > 36) pitch = 36;
+    int y = y0;
     uint32_t off = ui_lerp(th->bg, th->dim, 110);  /* disabled: fainter than dim */
     for (int r = 0; r < UI_SET_ROWS; r++, y += pitch) {
         bool sel = (r == v->set_sel);
@@ -755,7 +774,7 @@ static void render_settings(ui_canvas_t *c, const ui_view_t *v,
 
     const char *ver = "PIDVD 0.4 " G_DOT " 15 kHz " G_DOT
                       " CRT NEVER LIES";
-    ui_text(c, xl, g.y1 - 64, S_SM_X, S_SM_Y, th->dim, ver);
+    ui_text(c, xl, ver_y, S_SM_X, S_SM_Y, th->dim, ver);
 
     hint_t h[3];
     if (v->set_editing) {

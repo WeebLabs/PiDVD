@@ -17,7 +17,8 @@ static const char *cfg_path(int *needs_mount)
 }
 
 static const char *const theme_v[]  = { "AMBER & ICE", "PHOSPHOR", "VFD",
-                                        "MIDNIGHT", "TERMINAL" };
+                                        "MIDNIGHT", "TERMINAL", "DARK SAKURA",
+                                        "LIGHT SAKURA" };
 static const char *const layout_v[] = { "CONSOLE", "MARQUEE", "LEDGER",
                                         "WIREFRAME" };
 static const char *const dim_v[]    = { "OFF", "AFTER 5 MIN", "AFTER 15 MIN",
@@ -26,6 +27,12 @@ static const char *const dim_v[]    = { "OFF", "AFTER 5 MIN", "AFTER 15 MIN",
  * added without touching the loop. Indices match the PIDVD_SAVER_* enum. */
 static const char *const saver_v[]  = { "OFF", "WARP STARFIELD", "DVD LOGO",
                                         "FIREWORKS" };
+/* How long the picker must idle before the screensaver arms. Labels and the
+ * matching real seconds stay index-aligned; the run loop reads the seconds via
+ * ui_settings_saver_timeout_seconds(). */
+static const char *const saver_to_v[]  = { "30 SEC", "1 MIN", "2 MIN",
+                                           "5 MIN", "10 MIN" };
+static const int         saver_to_s[]  = { 30, 60, 120, 300, 600 };
 /* Menu composite horizontal low-pass: 0 off, 1..8 faint->strong. 4 is the
  * [1 2 1]/4 kernel; lower = sharper text / more cross-colour, higher = softer
  * text / cleaner colour. Tune to the lightest that clears the splotching. */
@@ -40,12 +47,13 @@ static const struct {
     const char *const *values;
     int n;
 } rows[UI_SET_ROWS] = {
-    [UI_SET_THEME]  = { "THEME",          theme_v,  5 },
+    [UI_SET_THEME]  = { "THEME",          theme_v,  7 },
     [UI_SET_LAYOUT] = { "LAYOUT",         layout_v, 4 },
     [UI_SET_ADEV]   = { "AUDIO DEVICE",   0,        0 }, /* dynamic */
     [UI_SET_VOL]    = { "VOLUME",         0,        0 }, /* dynamic */
     [UI_SET_DIM]    = { "ATTRACT DIM",    dim_v,    4 },
     [UI_SET_SAVER]  = { "SCREENSAVER",    saver_v,  4 },
+    [UI_SET_SAVER_TO] = { "SAVER TIMEOUT", saver_to_v, 5 },
     [UI_SET_FILTER] = { "COMP FILTER",    filter_v, 9 },
     [UI_SET_OUTPUT] = { "OUTPUT",         output_v, 2 },
     [UI_SET_RESCAN] = { "RESCAN CATALOG", 0,        0 },
@@ -58,6 +66,7 @@ static int *field(ui_settings_t *s, int row)
     case UI_SET_LAYOUT: return &s->layout;
     case UI_SET_DIM:    return &s->attract_dim;
     case UI_SET_SAVER:  return &s->saver;
+    case UI_SET_SAVER_TO: return &s->saver_to;
     case UI_SET_FILTER: return &s->comp_filter;
     case UI_SET_OUTPUT: return &s->output;
     default:            return 0;   /* ADEV/VOL/RESCAN handled specially */
@@ -76,7 +85,16 @@ int ui_settings_enabled(const ui_settings_t *s, int row)
 {
     if (row == UI_SET_FILTER)
         return s->output == 0;   /* composite (VEC) only */
+    if (row == UI_SET_SAVER_TO)
+        return s->saver != 0;    /* meaningless when SCREENSAVER is OFF */
     return 1;
+}
+
+int ui_settings_saver_timeout_seconds(const ui_settings_t *s)
+{
+    int n = (int)(sizeof saver_to_s / sizeof saver_to_s[0]);
+    int i = (s->saver_to >= 0 && s->saver_to < n) ? s->saver_to : 0;
+    return saver_to_s[i];
 }
 
 const char *ui_settings_value(const ui_settings_t *s, int row)
@@ -172,6 +190,7 @@ void ui_settings_load(ui_settings_t *s)
     s->volume = 100;       /* full scale; lower in SETTINGS */
     s->attract_dim = 2;    /* 15 min — CRT kindness by default */
     s->saver = 1;          /* WARP STARFIELD on by default (PIDVD_SAVER_WARP) */
+    s->saver_to = 2;       /* arm after 2 min idle (index into saver_to_v) */
     s->comp_filter = 5;    /* composite low-pass; tune in SETTINGS (0..8) */
     s->last_standard = 1;  /* last-disc standard for the resume shelf */
     s->audio_dev[0] = 0;   /* AUTO: prefer USB, fall back to PWM */
@@ -191,7 +210,7 @@ void ui_settings_load(ui_settings_t *s)
             *eq = 0;
             char *v = eq + 1;
             v[strcspn(v, "\r\n")] = 0;
-            if (!strcmp(line, "theme"))        s->theme = atoi(v) % 5;
+            if (!strcmp(line, "theme"))        s->theme = atoi(v) % 7;
             else if (!strcmp(line, "layout"))  s->layout = atoi(v) % 4;
             else if (!strcmp(line, "volume")) {
                 s->volume = atoi(v);
@@ -202,6 +221,7 @@ void ui_settings_load(ui_settings_t *s)
                 snprintf(s->audio_dev, sizeof(s->audio_dev), "%s", v);
             else if (!strcmp(line, "dim"))     s->attract_dim = atoi(v) & 3;
             else if (!strcmp(line, "saver"))   s->saver = atoi(v) % 4;
+            else if (!strcmp(line, "saver_to")) s->saver_to = atoi(v) % 5;
             else if (!strcmp(line, "filter")) {
                 s->comp_filter = atoi(v);
                 if (s->comp_filter < 0 || s->comp_filter > 8)
@@ -231,10 +251,10 @@ void ui_settings_save(const ui_settings_t *s)
     FILE *f = fopen(path, "w");
     if (f) {
         fprintf(f, "theme=%d\nlayout=%d\nvolume=%d\nadev=%s\ndim=%d\n"
-                   "saver=%d\nfilter=%d\noutput=%d\nlast_std=%d\nlast_disc=%s\n"
-                   "last_title=%d\nlast_sector=%d\nlast_seconds=%d\n",
+                   "saver=%d\nsaver_to=%d\nfilter=%d\noutput=%d\nlast_std=%d\n"
+                   "last_disc=%s\nlast_title=%d\nlast_sector=%d\nlast_seconds=%d\n",
                 s->theme, s->layout, s->volume, s->audio_dev,
-                s->attract_dim, s->saver, s->comp_filter, s->output,
+                s->attract_dim, s->saver, s->saver_to, s->comp_filter, s->output,
                 s->last_standard, s->last_disc,
                 s->last_title, s->last_sector, s->last_seconds);
         fclose(f);
