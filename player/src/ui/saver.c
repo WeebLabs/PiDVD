@@ -206,7 +206,7 @@
 /* --- spark appearance -------------------------------------------------- */
 #define FW_SPARK_THICK   2         /* base spark size px (even)                */
 #define FW_BACK_DIM      0.28f     /* brightness of the sphere's far side 0..1 */
-#define FW_HOT_CORE      0.92f     /* birth flash toward white, 0..1           */
+#define FW_HOT_CORE      1.00f     /* sparks born pure white, 0..1             */
 #define FW_HOT_FRAC      0.14f     /* fraction of life the white-hot core lasts*/
 #define FW_FADE_POW      1.45f     /* fade curve; >1 lingers then drops away   */
 #define FW_EMBER         0x551200u /* colour sparks cool toward near death     */
@@ -231,9 +231,22 @@
 #define FW_TWINKLE_HZ    9.0f      /* flicker rate, Hz                         */
 #define FW_TWINKLE_LOW   0.25f     /* brightness of an "off" strobe beat       */
 
-/* --- opening flash ----------------------------------------------------- */
+/* --- ignition: the detonation flash + a brief white sparkle ------------ */
 #define FW_FLASH_SECS    0.16f     /* duration of the burst's white flash      */
 #define FW_FLASH_PX      18        /* flash bloom size px                      */
+#define FW_FLASH_WHITE   250       /* how white the flash is, 0..256 toward white*/
+#define FW_FLASH_INNER   256       /* inner-core brightness at detonation,0..256*/
+#define FW_FLASH_OUTER   130       /* outer-bloom brightness, 0..256           */
+/* A brief scatter of tiny brilliant-white glints at the instant of the burst,
+ * each strobing on its own phase so it twinkles, then gone in a fraction of a
+ * second. Set FW_SPARKLE 0 to switch off. */
+#define FW_SPARKLE        1
+#define FW_SPARKLE_COUNT  26       /* number of white glints                   */
+#define FW_SPARKLE_SECS   0.24f    /* how long the sparkle lasts (brief)       */
+#define FW_SPARKLE_HZ     32.0f    /* flicker/strobe rate, Hz                  */
+#define FW_SPARKLE_SPREAD 0.55f    /* scatter radius as frac of explosion radius*/
+#define FW_SPARKLE_PX     2        /* glint size px (even, tiny)               */
+#define FW_SPARKLE_COL    0xFFFFFFu/* glint colour (pure white)                */
 
 /* --- burst-type mix (relative weights; edit to retune the show) -------- */
 #define FW_W_PEONY    5            /* round filled sphere                      */
@@ -701,16 +714,18 @@ static void fw_rocket(ui_canvas_t *c, const fw_shell_t *s, float age)
 static void fw_burst(ui_canvas_t *c, const ui_theme_t *th, const fw_shell_t *s,
                      uint32_t k, float ba, float t)
 {
-    if (ba < FW_FLASH_SECS) {                 /* the opening flash */
+    if (ba < FW_FLASH_SECS) {                 /* the detonation flash */
         float ff = 1.0f - ba / FW_FLASH_SECS;
-        uint32_t white = ui_lerp(s->color, 0xFFFFFFu, 210);
+        uint32_t white = ui_lerp(s->color, 0xFFFFFFu, FW_FLASH_WHITE);
         int big = (int)(FW_FLASH_PX * s->scale * (0.5f + 0.8f * ff));
         big -= (big & 1);
         int sm  = big / 2; sm -= (sm & 1);
         if (big < 2) big = 2;
         if (sm  < 2) sm  = 2;
-        plot(c, s->bx, s->by, big, ui_lerp(FW_BG, white, (int)(ff*90.0f*s->dim)));
-        plot(c, s->bx, s->by, sm,  ui_lerp(FW_BG, white, (int)(ff*220.0f*s->dim)));
+        plot(c, s->bx, s->by, big,
+             ui_lerp(FW_BG, white, (int)(ff * FW_FLASH_OUTER * s->dim)));
+        plot(c, s->bx, s->by, sm,
+             ui_lerp(FW_BG, white, (int)(ff * FW_FLASH_INNER * s->dim)));
     }
 
     float f = ba / s->life;                   /* life fraction 0..1 */
@@ -775,6 +790,30 @@ static void fw_burst(ui_canvas_t *c, const ui_theme_t *th, const fw_shell_t *s,
             px = x; py = y; pthk = kthk; pcc = cc; have = 1;
         }
         if (have) fw_spark(c, px, py, pthk, pcc);    /* glowing head */
+    }
+
+    /* a brief scatter of brilliant-white glints at the detonation — drawn over
+     * the sparks so the burst opens with a hard, twinkling white sparkle */
+    if (FW_SPARKLE && ba < FW_SPARKLE_SECS) {
+        float sf = 1.0f - ba / FW_SPARKLE_SECS;            /* fade out      */
+        float ex = 1.0f - expf(-s->drag * ba);             /* 0..1 expansion*/
+        int gpx = (int)(FW_SPARKLE_PX * s->scale + 0.5f);
+        gpx -= gpx & 1; if (gpx < 2) gpx = 2;
+        for (int j = 0; j < FW_SPARKLE_COUNT; j++) {
+            float a   = TAU * fw_h2(k, (uint32_t)j, 71u);
+            float rad = fw_h2(k, (uint32_t)j, 72u)
+                      * s->radius * FW_SPARKLE_SPREAD * ex;
+            float x = s->bx + cosf(a) * rad * FW_ASPECT;
+            float y = s->by + sinf(a) * rad;
+            float fl = sinf(TAU * (FW_SPARKLE_HZ * ba
+                                   + fw_h2(k, (uint32_t)j, 73u))) > 0.0f
+                       ? 1.0f : 0.0f;                       /* per-glint strobe */
+            int b = (int)(sf * fl * s->dim
+                          * (0.55f + 0.45f * fw_h2(k, (uint32_t)j, 74u))
+                          * 256.0f);
+            if (b <= 0) continue;
+            plot(c, x, y, gpx, ui_lerp(FW_BG, FW_SPARKLE_COL, b));
+        }
     }
 }
 
