@@ -24,7 +24,8 @@ static const char *const dim_v[]    = { "OFF", "AFTER 5 MIN", "AFTER 15 MIN",
                                         "AFTER 30 MIN" };
 /* Screensaver picker. One effect for now; the slot is here so more can be
  * added without touching the loop. Indices match the PIDVD_SAVER_* enum. */
-static const char *const saver_v[]  = { "OFF", "WARP STARFIELD", "DVD LOGO" };
+static const char *const saver_v[]  = { "OFF", "WARP STARFIELD", "DVD LOGO",
+                                        "FIREWORKS" };
 /* Menu composite horizontal low-pass: 0 off, 1..8 faint->strong. 4 is the
  * [1 2 1]/4 kernel; lower = sharper text / more cross-colour, higher = softer
  * text / cleaner colour. Tune to the lightest that clears the splotching. */
@@ -44,7 +45,7 @@ static const struct {
     [UI_SET_ADEV]   = { "AUDIO DEVICE",   0,        0 }, /* dynamic */
     [UI_SET_VOL]    = { "VOLUME",         0,        0 }, /* dynamic */
     [UI_SET_DIM]    = { "ATTRACT DIM",    dim_v,    4 },
-    [UI_SET_SAVER]  = { "SCREENSAVER",    saver_v,  3 },
+    [UI_SET_SAVER]  = { "SCREENSAVER",    saver_v,  4 },
     [UI_SET_FILTER] = { "COMP FILTER",    filter_v, 9 },
     [UI_SET_OUTPUT] = { "OUTPUT",         output_v, 2 },
     [UI_SET_RESCAN] = { "RESCAN CATALOG", 0,        0 },
@@ -200,7 +201,7 @@ void ui_settings_load(ui_settings_t *s)
             else if (!strcmp(line, "adev"))
                 snprintf(s->audio_dev, sizeof(s->audio_dev), "%s", v);
             else if (!strcmp(line, "dim"))     s->attract_dim = atoi(v) & 3;
-            else if (!strcmp(line, "saver"))   s->saver = atoi(v) % 3;
+            else if (!strcmp(line, "saver"))   s->saver = atoi(v) % 4;
             else if (!strcmp(line, "filter")) {
                 s->comp_filter = atoi(v);
                 if (s->comp_filter < 0 || s->comp_filter > 8)

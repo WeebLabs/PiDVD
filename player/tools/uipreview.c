@@ -188,6 +188,22 @@ int main(int argc, char **argv)
     pidvd_ui_render(&c, &v);
     snprintf(path, sizeof(path), "%s/saver-dvd-midnight.ppm", out);
     write_ppm(path, px);
+
+    /* Fireworks — a busy sky, so dump a few ticks/themes to catch shells at
+     * different ages (rising, fresh burst, raining down). Animated; the live
+     * look needs a CRT/Pi. */
+    set.saver = PIDVD_SAVER_FIREWORKS;
+    static const struct { int theme, tick; const char *tag; } fw[] = {
+        { 2, 360, "vfd" }, { 0, 540, "amber-ice" },
+        { 3, 720, "midnight" }, { 4, 900, "terminal" },
+    };
+    for (size_t i = 0; i < sizeof fw / sizeof fw[0]; i++) {
+        set.theme = fw[i].theme;
+        v.tick = fw[i].tick;
+        pidvd_ui_render(&c, &v);
+        snprintf(path, sizeof(path), "%s/saver-fireworks-%s.ppm", out, fw[i].tag);
+        write_ppm(path, px);
+    }
     v.saver_active = false;
 
     printf("wrote previews to %s/\n", out);
