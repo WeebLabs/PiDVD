@@ -3,8 +3,9 @@
 # attract screen until a USB drive appears (it mounts/unmounts the drive
 # itself), browse, playback, back to browse. We just launch it.
 
-# Init's stdout goes to /dev/console (serial); mirror to the CRT too.
-msg() { printf "%s\n" "$1" | tee /dev/tty1; }
+# Boot messages go to /dev/console (serial) only — never the CRT, which the
+# player owns. Mirroring to /dev/tty1 used to flash through on the display.
+msg() { printf "%s\n" "$1"; }
 
 case "$1" in
   start)
@@ -13,7 +14,7 @@ case "$1" in
     ip=$(ip -4 addr show eth0 2>/dev/null | sed -n 's/.*inet \([0-9.]*\).*/\1/p')
     [ -n "$ip" ] && msg "PiDVD: network $ip"
     msg "PiDVD: boot $(cut -d. -f1 /proc/uptime)s"
-    pidvd-player --ui > /dev/tty1 2>&1 &
+    pidvd-player --ui > /dev/console 2>&1 &
     ;;
   stop)
     killall pidvd-player 2>/dev/null

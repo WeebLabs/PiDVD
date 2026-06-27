@@ -1,1 +1,1 @@
-root=/dev/mmcblk0p2 rootwait ro console=tty1 console=serial0,115200 snd_bcm2835.enable_headphones=1 vc4.tv_norm=NTSC video=Composite-1:e video=HDMI-A-1:d
+root=/dev/mmcblk0p2 rootwait ro quiet logo.nologo vt.global_cursor_default=0 console=serial0,115200 snd_bcm2835.enable_headphones=1 vc4.tv_norm=NTSC video=Composite-1:e video=HDMI-A-1:d

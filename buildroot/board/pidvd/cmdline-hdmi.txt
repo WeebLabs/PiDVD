@@ -1,1 +1,1 @@
-root=/dev/mmcblk0p2 rootwait ro console=tty1 console=serial0,115200 video=HDMI-A-1:720x576i@50 snd_bcm2835.enable_headphones=1
+root=/dev/mmcblk0p2 rootwait ro quiet logo.nologo vt.global_cursor_default=0 console=serial0,115200 video=HDMI-A-1:720x576i@50 snd_bcm2835.enable_headphones=1

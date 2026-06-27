@@ -1,5 +1,6 @@
-# PiDVD inittab — Buildroot's generated default plus a getty on tty1 so
-# the CRT (composite/VEC console) gets a login alongside serial.
+# PiDVD inittab — Buildroot's generated default. No getty on tty1: the CRT
+# is the appliance's display, so a login prompt there would flash through
+# during boot and on KMS mode switches. Serial keeps a login for debugging.
 ::sysinit:/bin/mount -t proc proc /proc
 ::sysinit:/bin/mount -o remount,rw /
 ::sysinit:/bin/mkdir -p /dev/pts /dev/shm
@@ -14,7 +15,6 @@ null::sysinit:/bin/ln -sf /proc/self/fd/2 /dev/stderr
 ::sysinit:/etc/init.d/rcS
 
 console::respawn:/sbin/getty -L console 0 vt100
-tty1::respawn:/sbin/getty -L tty1 0 linux
 
 ::ctrlaltdel:/sbin/reboot
 ::shutdown:/etc/init.d/rcK
