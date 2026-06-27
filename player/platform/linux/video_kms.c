@@ -583,6 +583,23 @@ static void calibrate_field_parity(pidvd_video_t *v)
             "field_parity=%u\n", v->anchor_par, g_field_calib, v->field_parity);
 }
 
+/* The picker and playback each open a KMS session and close it on the way out,
+ * but the player is the *only* DRM client — so that close is the device's last
+ * close, and the kernel restores fbcon (the tty1 login prompt) over the CRT:
+ * the "terminal flash" seen between menu and playback. Holding one extra,
+ * master-less fd open for the whole process keeps the device from ever hitting
+ * last-close during a mode switch, so the console is never restored. The fd is
+ * intentionally leaked for the process lifetime. */
+static void hold_device_open(void)
+{
+    static int keepalive = -1;
+    if (keepalive >= 0)
+        return;
+    keepalive = open("/dev/dri/card0", O_RDWR | O_CLOEXEC);
+    if (keepalive >= 0)
+        drmDropMaster(keepalive);   /* hold the device, never the CRTC */
+}
+
 pidvd_video_t *pidvd_video_open_mode(pidvd_standard_t std, pidvd_scan_t scan)
 {
     pidvd_video_t *v = calloc(1, sizeof(*v));
@@ -602,6 +619,12 @@ pidvd_video_t *pidvd_video_open_mode(pidvd_standard_t std, pidvd_scan_t scan)
                 strerror(errno));
         goto fail;
     }
+    /* Become master explicitly: once the keepalive fd holds the device open a
+     * fresh session is no longer the first open, so master isn't granted
+     * implicitly. Root has the privilege; a stale modeset error would surface
+     * downstream in setup_mode if this ever failed. */
+    drmSetMaster(v->fd);
+    hold_device_open();
     if (!select_mode(v, std, scan)) {
         fprintf(stderr, "video: no connected %s mode on Composite-1\n",
                 pidvd_standard_name(std));
