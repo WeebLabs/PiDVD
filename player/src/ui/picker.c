@@ -320,16 +320,22 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
             bool touched = false;   /* a value changed this key (adjust or revert) */
             if (!view.set_editing) {
                 switch (k) {
-                case PIDVD_KEY_UP:
-                    do {
-                        view.set_sel = (view.set_sel + UI_SET_ROWS - 1) % UI_SET_ROWS;
-                    } while (!ui_settings_enabled(set, view.set_sel));
+                case PIDVD_KEY_UP:      /* move within the active tab */
+                    view.set_sel = ui_settings_tab_step(set, view.set_tab,
+                                                        view.set_sel, -1);
                     break;
                 case PIDVD_KEY_DOWN:
-                    do {
-                        view.set_sel = (view.set_sel + 1) % UI_SET_ROWS;
-                    } while (!ui_settings_enabled(set, view.set_sel));
+                    view.set_sel = ui_settings_tab_step(set, view.set_tab,
+                                                        view.set_sel, +1);
                     break;
+                case PIDVD_KEY_LEFT:    /* switch tabs; land on its first live row */
+                case PIDVD_KEY_RIGHT: {
+                    int nt = ui_settings_tab_count();
+                    int dir = (k == PIDVD_KEY_LEFT) ? -1 : 1;
+                    view.set_tab = (view.set_tab + dir + nt) % nt;
+                    view.set_sel = ui_settings_tab_first(set, view.set_tab);
+                    break;
+                }
                 case PIDVD_KEY_ENTER:
                     if (view.set_sel == UI_SET_RESCAN) {
                         if (cat) catalog_rescan(cat);   /* an action, not a value */
@@ -447,7 +453,8 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
             case PIDVD_KEY_SETTINGS:       /* gear: open SETTINGS from any folder */
                 prev_screen = UI_BROWSE;
                 view.screen = UI_SETTINGS;
-                view.set_sel = 0;
+                view.set_tab = 0;                              /* open on DISPLAY */
+                view.set_sel = ui_settings_tab_first(set, 0);
                 view.set_editing = false;
                 break;
             case PIDVD_KEY_TITLE:
@@ -477,7 +484,8 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
             if (k == PIDVD_KEY_SETTINGS) {
                 prev_screen = UI_ATTRACT;
                 view.screen = UI_SETTINGS;
-                view.set_sel = 0;
+                view.set_tab = 0;                              /* open on DISPLAY */
+                view.set_sel = ui_settings_tab_first(set, 0);
                 view.set_editing = false;
             }
         }

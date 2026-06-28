@@ -188,6 +188,7 @@ int main(int argc, char **argv)
         set.layout = UI_CONSOLE;
         v.screen = UI_SETTINGS;
         v.set_sel = UI_SET_THEME;
+        v.set_tab = ui_settings_row_tab(v.set_sel);
         pidvd_ui_render(&c, &v);
         snprintf(path, sizeof(path), "%s/settings-%s.ppm", out, sak[s].name);
         write_ppm(path, px);
@@ -201,6 +202,7 @@ int main(int argc, char **argv)
         set.layout = UI_CONSOLE;
         v.screen = UI_SETTINGS;
         v.set_sel = UI_SET_SAVER_TO;
+        v.set_tab = ui_settings_row_tab(v.set_sel);   /* IDLE tab */
         set.theme = 0;
         pidvd_ui_render(&cn, &v);
         snprintf(path, sizeof(path), "%s/settings-ntsc-amber-ice.ppm", out);
@@ -216,6 +218,17 @@ int main(int argc, char **argv)
 
     set.layout = UI_CONSOLE;
     v.screen = UI_SETTINGS;
+    /* One frame per tab so the strip + per-tab row flow (incl. the 1- and
+     * 2-row tabs) can all be eyeballed. */
+    for (int t = 0; t < ui_settings_tab_count(); t++) {
+        v.set_tab = t;
+        v.set_sel = ui_settings_tab_row(t, 0);
+        pidvd_ui_render(&c, &v);
+        snprintf(path, sizeof(path), "%s/settings-tab-%s.ppm", out,
+                 ui_settings_tab_name(t));
+        write_ppm(path, px);
+    }
+    v.set_tab = 0;
     v.set_sel = 0;
     pidvd_ui_render(&c, &v);
     snprintf(path, sizeof(path), "%s/settings-amber-ice.ppm", out);

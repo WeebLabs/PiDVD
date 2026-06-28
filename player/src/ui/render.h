@@ -64,7 +64,8 @@ typedef struct {
     const char *notice;           /* e.g. "NO DVD ISOS FOUND" */
 
     /* SETTINGS */
-    int set_sel;
+    int set_tab;                  /* active tab; rows shown/navigated within it */
+    int set_sel;                  /* selected row (a global UI_SET_* index) */
     bool set_editing;             /* row opened for adjustment: ‹ › change, OK commit */
 
     int tick;                     /* field-rate frame counter (animation) */

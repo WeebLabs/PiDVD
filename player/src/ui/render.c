@@ -5,6 +5,7 @@
 #include "ui/render.h"
 
 #include <stdio.h>
+#include <string.h>
 
 #include "ui/font8.h"
 #include "ui/saver.h"
@@ -80,6 +81,28 @@ static geo_t geo(const ui_canvas_t *c)
     g.y1 = c->h - g.y0;
     return g;
 }
+
+/* Rule-based vertical layout. Bands stack from the top, a few are pinned to the
+ * bottom, and whatever is left between the two cursors is the content area —
+ * each band only states its own height, so inserting one (a tab strip, say)
+ * shifts everything below it for free, with no hand-tuned y-offsets. x0/x1 carry
+ * the content width through so callers don't re-derive it from geo. */
+typedef struct {
+    int x0, x1;     /* content left / right edge */
+    int top, bot;   /* top cursor grows down, bottom cursor grows up */
+} vstack_t;
+
+static vstack_t vstack(geo_t g)
+{
+    return (vstack_t){ g.x0, g.x1, g.y0, g.y1 };
+}
+
+/* Reserve a band of height h at the top (bottom); returns the band's top y. */
+static int vs_top(vstack_t *s, int h) { int y = s->top; s->top += h; return y; }
+static int vs_bot(vstack_t *s, int h) { s->bot -= h; return s->bot; }
+
+/* Vertical space still free between the two cursors. */
+static int vs_rest(const vstack_t *s) { return s->bot - s->top; }
 
 static const char *spinner(int tick)
 {
@@ -732,35 +755,99 @@ static void render_ledger(ui_canvas_t *c, const ui_view_t *v,
 
 /* ---- SETTINGS ----------------------------------------------------------- */
 
+/* Pan a string left<->right inside a `win`-character window so a value too long
+ * to fit (a long audio-device name) can be read end to end. Holds briefly at
+ * each end, then reverses. Writes <= win chars + NUL into out and returns it.
+ * Pure function of the field-rate tick, so it animates as the picker re-renders
+ * each field; short strings pass through untouched. */
+static const char *marquee(char *out, int cap, const char *s, int win, int tick)
+{
+    int len = (int)strlen(s);
+    if (len <= win) {
+        snprintf(out, (size_t)cap, "%s", s);
+        return out;
+    }
+    int span = len - win;            /* characters to traverse */
+    const int step = 16;             /* fields per character — slow */
+    const int hold = 45;             /* pause at each end (fields) */
+    int run = span * step;
+    int t = tick % (2 * (hold + run));
+    int off;
+    if (t < hold)                       off = 0;
+    else if (t < hold + run)            off = (t - hold) / step;
+    else if (t < hold + run + hold)     off = span;
+    else                                off = span - (t - run - 2 * hold) / step;
+    if (off < 0)    off = 0;
+    if (off > span) off = span;
+    snprintf(out, (size_t)cap, "%.*s", win, s + off);
+    return out;
+}
+
+/* SETTINGS bands (rule-based; see vstack). The tab strip is just another
+ * vs_top() band between the title and the rows — adding it shifted nothing
+ * below it by hand. */
+#define SET_HEAD_H  56   /* "◉ SETTINGS" title band */
+#define SET_TAB_H   34   /* tab strip band */
+#define SET_TAB_PAD 16   /* breathing room between the strip and the first row */
+#define SET_FOOT_H  26   /* footer band: hints + version, pinned to the bottom */
+#define SET_ROW_MAX 36   /* roomy row pitch; compresses to fit the 480 NTSC menu */
+
 static void render_settings(ui_canvas_t *c, const ui_view_t *v,
                             const ui_theme_t *th)
 {
     geo_t g = geo(c);
-    int x = ui_text(c, g.x0 + 24, g.y0 + 8, S_LS_X, S_LS_Y, th->hot,
-                    G_DISC);
-    ui_text(c, x + 8, g.y0 + 8, S_LS_X, S_LS_Y, th->bright, "SETTINGS");
+    vstack_t s = vstack(g);
 
-    int xl = g.x0 + 56, xv = g.x0 + 320;
-    int y0 = g.y0 + 76, ver_y = g.y1 - 64;
-    /* Fit every row between the header and the version line: the roomy 36 px
-     * pitch on the 576 PAL menu clamps down on the shorter 480 NTSC one so the
-     * last row still clears the footer. */
-    int pitch = (ver_y - 20 - y0) / (UI_SET_ROWS - 1);
-    if (pitch > 36) pitch = 36;
-    int y = y0;
+    /* Title band. */
+    int hy = vs_top(&s, SET_HEAD_H);
+    int x = ui_text(c, g.x0 + 24, hy + 8, S_LS_X, S_LS_Y, th->hot, G_DISC);
+    ui_text(c, x + 8, hy + 8, S_LS_X, S_LS_Y, th->bright, "SETTINGS");
+
+    /* Tab strip: names left to right, the active one bright + underlined. */
+    int ty = vs_top(&s, SET_TAB_H);
+    int tx = s.x0 + 24;
+    for (int t = 0, nt = ui_settings_tab_count(); t < nt; t++) {
+        const char *name = ui_settings_tab_name(t);
+        int w = ui_text_w(name, S_SM_X);
+        bool act = (t == v->set_tab);
+        ui_text(c, tx, ty + 8, S_SM_X, S_SM_Y, act ? th->bright : th->dim, name);
+        if (act)
+            ui_hline2(c, tx, ty + 26, w, th->hot);
+        tx += w + 32;
+    }
+    ui_hline2(c, s.x0, ty + 30, s.x1 - s.x0, th->panel);   /* strip divider */
+    vs_top(&s, SET_TAB_PAD);                                /* pad before rows */
+
+    /* Footer pinned to the bottom (footer() draws its hints at y1-18); reserve
+     * its band so the rows stop above it. The version label shares that line. */
+    vs_bot(&s, SET_FOOT_H);
+
+    /* Only the active tab's rows, flowed in the remaining space — evenly
+     * pitched but never looser than SET_ROW_MAX, so a one-row tab still
+     * top-aligns instead of floating in the middle. */
+    int n = ui_settings_tab_len(v->set_tab);
+    int rows_h = vs_rest(&s);
+    int pitch = (rows_h - 24) / (n > 1 ? n - 1 : 1);
+    if (pitch > SET_ROW_MAX) pitch = SET_ROW_MAX;
+
+    int xl = s.x0 + 56, xv = s.x0 + 320;
+    int y = s.top;
     uint32_t off = ui_lerp(th->bg, th->dim, 110);  /* disabled: fainter than dim */
-    for (int r = 0; r < UI_SET_ROWS; r++, y += pitch) {
+    for (int i = 0; i < n; i++, y += pitch) {
+        int r = ui_settings_tab_row(v->set_tab, i);
         bool sel = (r == v->set_sel);
         bool edit = sel && v->set_editing;   /* row is open for adjustment */
         bool on = ui_settings_enabled(v->set, r);
         ui_text(c, xl, y, S_LS_X, S_LS_Y,
                 !on ? off : (sel ? th->text : th->dim), ui_settings_label(r));
-        char val[64];
+        char val[64], win[16];
+        const char *raw = ui_settings_value(v->set, r);
+        if (r == UI_SET_ADEV)   /* window + slow-scroll long device names */
+            raw = marquee(win, sizeof(win), raw, 13, v->tick);
         if (edit)   /* ‹ › arrows appear only while the row is being adjusted */
-            snprintf(val, sizeof(val), G_LEFT " %s " G_RIGHT,
-                     ui_settings_value(v->set, r));
+            snprintf(val, sizeof(val), G_LEFT " %s " G_RIGHT, raw);
         else
-            snprintf(val, sizeof(val), "%s", ui_settings_value(v->set, r));
+            snprintf(val, sizeof(val), "%s", raw);
         if (sel) {
             int w = ui_text_w(val, S_LS_X);
             /* armed/editing row glows in the hot accent; a merely-selected row
@@ -772,21 +859,23 @@ static void render_settings(ui_canvas_t *c, const ui_view_t *v,
         }
     }
 
-    const char *ver = "PIDVD 0.4 " G_DOT " 15 kHz " G_DOT
-                      " CRT NEVER LIES";
-    ui_text(c, xl, ver_y, S_SM_X, S_SM_Y, th->dim, ver);
-
-    hint_t h[3];
     if (v->set_editing) {
-        h[0] = (hint_t){ G_LEFT G_RIGHT, "CHANGE" };
-        h[1] = (hint_t){ G_ENTER, "CONFIRM" };
-        h[2] = (hint_t){ G_BACK, "REVERT" };   /* Back undoes the edit */
+        hint_t h[3] = {
+            { G_LEFT G_RIGHT, "CHANGE" }, { G_ENTER, "CONFIRM" },
+            { G_BACK, "REVERT" },          /* Back undoes the edit */
+        };
+        footer(c, &g, th, h, 3, false);
     } else {
-        h[0] = (hint_t){ G_UP G_DOWN, "SELECT" };
-        h[1] = (hint_t){ G_ENTER, "EDIT" };
-        h[2] = (hint_t){ G_BACK, "CLOSE" };    /* Back leaves SETTINGS */
+        hint_t h[4] = {
+            { G_UP G_DOWN, "SELECT" }, { G_LEFT G_RIGHT, "TABS" },
+            { G_ENTER, "EDIT" }, { G_BACK, "CLOSE" },   /* Back leaves SETTINGS */
+        };
+        footer(c, &g, th, h, 4, false);
     }
-    footer(c, &g, th, h, 3, false);
+    /* Version label rides the right end of the footer line. */
+    const char *ver = "PIDVD 0.4";
+    ui_text(c, g.x1 - ui_text_w(ver, S_SM_X), g.y1 - 18, S_SM_X, S_SM_Y,
+            th->dim, ver);
 }
 
 /* ---- entry -------------------------------------------------------------- */

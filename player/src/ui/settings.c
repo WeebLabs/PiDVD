@@ -59,6 +59,80 @@ static const struct {
     [UI_SET_RESCAN] = { "RESCAN CATALOG", 0,        0 },
 };
 
+/* ---- tabs: a view grouping over rows[] --------------------------------- */
+enum { UI_TAB_DISPLAY, UI_TAB_AUDIO, UI_TAB_IDLE, UI_TAB_SYSTEM, UI_N_TABS };
+
+static const char *const tab_v[UI_N_TABS] = {
+    "DISPLAY", "AUDIO", "IDLE", "SYSTEM"
+};
+
+/* Ordered rows per tab, -1 terminated (the order here is the on-screen order).
+ * Every row must appear in exactly one tab. */
+static const int tab_rows[UI_N_TABS][UI_SET_ROWS + 1] = {
+    [UI_TAB_DISPLAY] = { UI_SET_THEME, UI_SET_LAYOUT, UI_SET_OUTPUT,
+                         UI_SET_FILTER, -1 },
+    [UI_TAB_AUDIO]   = { UI_SET_ADEV, UI_SET_VOL, -1 },
+    [UI_TAB_IDLE]    = { UI_SET_DIM, UI_SET_SAVER, UI_SET_SAVER_TO, -1 },
+    [UI_TAB_SYSTEM]  = { UI_SET_RESCAN, -1 },
+};
+
+int ui_settings_tab_count(void) { return UI_N_TABS; }
+
+const char *ui_settings_tab_name(int tab)
+{
+    return (tab >= 0 && tab < UI_N_TABS) ? tab_v[tab] : "";
+}
+
+int ui_settings_tab_len(int tab)
+{
+    if (tab < 0 || tab >= UI_N_TABS)
+        return 0;
+    int n = 0;
+    while (tab_rows[tab][n] >= 0)
+        n++;
+    return n;
+}
+
+int ui_settings_tab_row(int tab, int i)
+{
+    if (tab < 0 || tab >= UI_N_TABS || i < 0 || i >= ui_settings_tab_len(tab))
+        return -1;
+    return tab_rows[tab][i];
+}
+
+int ui_settings_row_tab(int row)
+{
+    for (int t = 0; t < UI_N_TABS; t++)
+        for (int i = 0; tab_rows[t][i] >= 0; i++)
+            if (tab_rows[t][i] == row)
+                return t;
+    return 0;
+}
+
+int ui_settings_tab_first(const ui_settings_t *s, int tab)
+{
+    for (int i = 0, n = ui_settings_tab_len(tab); i < n; i++)
+        if (ui_settings_enabled(s, tab_rows[tab][i]))
+            return tab_rows[tab][i];
+    return ui_settings_tab_row(tab, 0);   /* nothing live: land on the first */
+}
+
+int ui_settings_tab_step(const ui_settings_t *s, int tab, int row, int dir)
+{
+    int n = ui_settings_tab_len(tab);
+    if (n <= 0)
+        return row;
+    int pos = 0;
+    for (int i = 0; i < n; i++)
+        if (tab_rows[tab][i] == row) { pos = i; break; }
+    for (int step = 0; step < n; step++) {
+        pos = (pos + dir + n) % n;
+        if (ui_settings_enabled(s, tab_rows[tab][pos]))
+            return tab_rows[tab][pos];
+    }
+    return row;   /* none live: stay put */
+}
+
 static int *field(ui_settings_t *s, int row)
 {
     switch (row) {
@@ -106,7 +180,7 @@ const char *ui_settings_value(const ui_settings_t *s, int row)
         if (s->n_dev <= 0)
             return "AUTO";
         int i = (s->dev_sel >= 0 && s->dev_sel < s->n_dev) ? s->dev_sel : 0;
-        return s->dev_label[i];
+        return s->dev_label[i];   /* full name; render_settings windows/scrolls it */
     }
     if (row == UI_SET_VOL) {
         snprintf(buf, sizeof(buf), "%d%%", s->volume);

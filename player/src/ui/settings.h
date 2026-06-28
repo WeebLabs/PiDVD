@@ -65,4 +65,17 @@ void ui_settings_resolve_dev(ui_settings_t *s);
  * before the screensaver arms. The run loop turns this into field-rate frames. */
 int ui_settings_saver_timeout_seconds(const ui_settings_t *s);
 
+/* SETTINGS tabs — a view grouping over the flat rows[] list. Each row belongs
+ * to one tab; rows render and navigate only within their tab. */
+int  ui_settings_tab_count(void);
+const char *ui_settings_tab_name(int tab);
+int  ui_settings_tab_len(int tab);          /* number of rows in the tab */
+int  ui_settings_tab_row(int tab, int i);   /* the i-th row of tab, -1 past end */
+int  ui_settings_row_tab(int row);          /* the tab that holds `row` */
+/* Move within a tab, skipping rows that are currently disabled (gated). Both
+ * return a global row index. tab_first lands on the first live row; tab_step
+ * advances from `row` by dir (+1/-1), wrapping inside the tab. */
+int  ui_settings_tab_first(const ui_settings_t *s, int tab);
+int  ui_settings_tab_step(const ui_settings_t *s, int tab, int row, int dir);
+
 #endif
