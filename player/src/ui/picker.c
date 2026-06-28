@@ -274,6 +274,10 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
             view.screen = UI_ATTRACT;
         }
 
+        /* ATTRACT reads LOADING while a just-inserted drive is recognized but
+         * not yet mounted + scanned; INSERT DISC when there's no drive at all. */
+        view.notice = (!cat && drive_present()) ? "L O A D I N G" : NULL;
+
         pidvd_key_t k = pidvd_input_poll(in);
 
         /* Idle screensaver. Any key resets the idle timer; if the saver is
