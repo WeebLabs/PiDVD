@@ -22,6 +22,10 @@
  * cache can live on the drive; cache writes degrade gracefully on ro
  * media. */
 
+/* The USB "tray": one mass-storage drive expected, so a short fixed list of
+ * block nodes covers it. */
+static const char *const usb_devs[] = { "/dev/sda1", "/dev/sda" };
+
 static bool drive_mounted(void)
 {
     struct stat a, b;
@@ -30,30 +34,43 @@ static bool drive_mounted(void)
     return a.st_dev != b.st_dev;
 }
 
+/* Is the drive physically present? A yanked USB stick leaves a stale VFS mount,
+ * so drive_mounted() alone can't tell — but the block device vanishing can. */
+static bool drive_present(void)
+{
+    struct stat st;
+    for (unsigned i = 0; i < sizeof usb_devs / sizeof usb_devs[0]; i++)
+        if (stat(usb_devs[i], &st) == 0 && S_ISBLK(st.st_mode))
+            return true;
+    return false;
+}
+
 static bool drive_try_mount(void)
 {
     if (drive_mounted())
         return true;
     mkdir("/media", 0755);
     mkdir(MEDIA_ROOT, 0755);
-    static const char *const devs[] = { "/dev/sda1", "/dev/sda" };
-    for (unsigned i = 0; i < 2; i++) {
+    for (unsigned i = 0; i < sizeof usb_devs / sizeof usb_devs[0]; i++) {
         struct stat st;
-        if (stat(devs[i], &st) || !S_ISBLK(st.st_mode))
+        if (stat(usb_devs[i], &st) || !S_ISBLK(st.st_mode))
             continue;
         char cmd[128];
         snprintf(cmd, sizeof(cmd),
                  "mount -o rw,noatime %s " MEDIA_ROOT " 2>/dev/null",
-                 devs[i]);
+                 usb_devs[i]);
         if (system(cmd) == 0 && drive_mounted())
             return true;
     }
     return false;
 }
 
+/* Normal unmount; if the mount is stale/busy (the device was yanked), fall back
+ * to a lazy detach so the mountpoint frees up for a remount. */
 static void drive_eject(void)
 {
-    (void)system("umount " MEDIA_ROOT " 2>/dev/null");
+    if (system("umount " MEDIA_ROOT " 2>/dev/null") != 0)
+        (void)system("umount -l " MEDIA_ROOT " 2>/dev/null");
 }
 
 /* ---- the loop ---------------------------------------------------------- */
@@ -246,10 +263,14 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
             } else if (view.screen == UI_BROWSE) {
                 view.screen = UI_ATTRACT;
             }
-        } else if (!drive_mounted()) {
-            /* yanked mid-browse */
+        } else if (!drive_present() || !drive_mounted()) {
+            /* Drive gone — physically yanked (the kernel leaves a stale mount,
+             * caught here by the missing block device) or unmounted. Drop the
+             * dead mount and fall back to ATTRACT; a reconnect re-mounts and
+             * re-scans through the !cat path above. */
             catalog_close(cat);
             cat = NULL;
+            drive_eject();   /* clear the stale mount so a remount can happen */
             view.screen = UI_ATTRACT;
         }
 
