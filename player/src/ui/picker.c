@@ -302,6 +302,21 @@ int pidvd_picker_main(ui_settings_t *set, const char *now_playing,
             && idle >= idle_frames)
             view.saver_active = true;
 
+        /* Volume is global: VOL+/- adjusts the output card live on every screen,
+         * playing or not, and pops a brief readout. Consume the key so it never
+         * doubles as navigation. */
+        if (k == PIDVD_KEY_VOL_UP || k == PIDVD_KEY_VOL_DOWN) {
+            int vv = set->volume + (k == PIDVD_KEY_VOL_UP ? 5 : -5);
+            if (vv < 0)   vv = 0;
+            if (vv > 100) vv = 100;
+            set->volume = vv;
+            pidvd_audio_set_volume(set->audio_dev, set->volume);
+            view.vol_osd = 90;          /* ~1.5 s at the menu field rate */
+            k = PIDVD_KEY_NONE;
+        }
+        if (view.vol_osd > 0)
+            view.vol_osd--;
+
         if (confirm_reboot) {
             switch (k) {
             case PIDVD_KEY_ENTER:

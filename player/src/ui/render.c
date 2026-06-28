@@ -891,6 +891,36 @@ int pidvd_ui_visible_rows(const ui_view_t *v, int canvas_h)
     return (canvas_h - y0 - 26 - yb) / CON_ROW_H;
 }
 
+/* Transient volume overlay. VOL+/- works on every picker screen (playing or
+ * not), so it needs its own readout — an idle change is otherwise silent and
+ * invisible. Centered panel with a fill bar; v->vol_osd counts how many more
+ * fields it stays up. */
+static void render_vol_osd(ui_canvas_t *c, const ui_view_t *v,
+                           const ui_theme_t *th)
+{
+    geo_t g = geo(c);
+    int vol = v->set->volume;
+    if (vol < 0)   vol = 0;
+    if (vol > 100) vol = 100;
+
+    int w = 360, h = 60;
+    int x = (g.x0 + g.x1 - w) / 2;
+    int y = (g.y0 + g.y1 - h) / 2;
+    ui_fill(c, x, y, w, h, th->panel);
+    ui_hline2(c, x, y, w, th->dim);
+    ui_hline2(c, x, y + h - 2, w, th->dim);
+
+    char pct[8];
+    snprintf(pct, sizeof(pct), "%d%%", vol);
+    ui_text(c, x + 18, y + 12, S_SM_X, S_SM_Y, th->bright, "VOLUME");
+    ui_text(c, x + w - 18 - ui_text_w(pct, S_SM_X), y + 12, S_SM_X, S_SM_Y,
+            th->bright, pct);
+
+    int bx = x + 18, by = y + 36, bw = w - 36, bh = 10;
+    ui_fill(c, bx, by, bw, bh, ui_lerp(th->bg, th->dim, 160));  /* track */
+    ui_fill(c, bx, by, bw * vol / 100, bh, th->bar);            /* fill */
+}
+
 void pidvd_ui_render(ui_canvas_t *c, const ui_view_t *v)
 {
     int ti = v->set->theme;
@@ -923,4 +953,7 @@ void pidvd_ui_render(ui_canvas_t *c, const ui_view_t *v)
         }
         break;
     }
+
+    if (v->vol_osd > 0)
+        render_vol_osd(c, v, th);
 }

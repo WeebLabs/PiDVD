@@ -70,6 +70,7 @@ typedef struct {
 
     int tick;                     /* field-rate frame counter (animation) */
     bool saver_active;            /* idle: draw the screensaver over `screen` */
+    int vol_osd;                  /* >0: draw the volume readout for this many fields */
 } ui_view_t;
 
 void pidvd_ui_render(ui_canvas_t *c, const ui_view_t *v);
