@@ -873,7 +873,7 @@ static void render_settings(ui_canvas_t *c, const ui_view_t *v,
         footer(c, &g, th, h, 4, false);
     }
     /* Version label rides the right end of the footer line. */
-    const char *ver = "PIDVD 0.4";
+    const char *ver = "PIDVD 1.0.0";
     ui_text(c, g.x1 - ui_text_w(ver, S_SM_X), g.y1 - 18, S_SM_X, S_SM_Y,
             th->dim, ver);
 }
